@@ -1,6 +1,6 @@
 // SoundManager for playing UI sounds
 use crate::global_prefs::global_prefs;
-#[cfg(not(target_env = "musl"))]
+#[cfg(all(not(target_env = "musl"), not(target_os = "android")))]
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,14 +24,14 @@ pub enum SoundType {
     Save,
 }
 
-#[cfg(not(target_env = "musl"))]
+#[cfg(all(not(target_env = "musl"), not(target_os = "android")))]
 pub struct SoundManager {
     _stream: OutputStream,
     stream_handle: OutputStreamHandle,
     sounds: HashMap<SoundType, Vec<u8>>, // Store sound data in memory
 }
 
-#[cfg(not(target_env = "musl"))]
+#[cfg(all(not(target_env = "musl"), not(target_os = "android")))]
 impl SoundManager {
     pub fn new() -> Self {
         let (_stream, stream_handle) = OutputStream::try_default().expect("Failed to open audio output");
@@ -89,10 +89,10 @@ impl SoundManager {
 }
 
 // --- No-op SoundManager for musl targets ---
-#[cfg(target_env = "musl")]
+#[cfg(any(target_env = "musl", target_os = "android"))]
 pub struct SoundManager;
 
-#[cfg(target_env = "musl")]
+#[cfg(any(target_env = "musl", target_os = "android"))]
 impl SoundManager {
     pub fn new() -> Self { SoundManager }
     pub fn play(&self, _sound: SoundType) {}
