@@ -329,7 +329,7 @@ async fn a_bad_token_is_reported_not_retried() {
     let error = transport.sign_in().await.expect_err("must fail");
     assert_eq!(error.status(), Some(401));
     assert!(!error.is_retryable());
-    assert!(error.user_message().contains("rejected the token"));
+    assert!(error.user_message().contains("Invalid or expired token"));
 }
 
 #[tokio::test]

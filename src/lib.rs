@@ -422,6 +422,19 @@ mod tests {
     }
 
     #[test]
+    fn the_web_form_shows_the_sso_field_and_the_failure() {
+        let (mut app, _commands) = headless_app();
+        app.auth.toggle_transport();
+        let screen = render(&mut app);
+        assert!(screen.contains("SSO session"), "{screen}");
+        assert!(screen.contains("SIGN IN"), "{screen}");
+        app.auth_error = Some("Sign-in rejected: Invalid login credentials".to_string());
+        let screen = render(&mut app);
+        assert!(screen.contains("Sign-in failed"), "{screen}");
+        assert!(screen.contains("Invalid login credentials"), "{screen}");
+    }
+
+    #[test]
     fn a_ready_event_records_the_instance_and_capabilities() {
         let (mut app, _commands) = headless_app();
         let user = domain::User {

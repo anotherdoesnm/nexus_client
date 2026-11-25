@@ -172,9 +172,7 @@ impl HarmonyError {
             Self::Unreachable(host) => format!("Cannot reach {host}"),
             Self::NotHarmony(host) => format!("{host} does not answer as a Harmony instance"),
             Self::BadInstance(host) => format!("Invalid instance address: {host}"),
-            Self::Unauthorized { .. } => {
-                "The instance rejected the token (revoked or expired?)".to_string()
-            }
+            Self::Unauthorized { message } => format!("Sign-in rejected: {message}"),
             Self::Forbidden { message } => format!("Not allowed: {message}"),
             Self::NotFound { message } => format!("Not found: {message}"),
             Self::BadRequest { message } => format!("Rejected: {message}"),

@@ -17,31 +17,37 @@ pub fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
         "Sign in to a Harmony instance — {}",
         app.auth.transport_label()
     );
-    let outer_block = Block::default().title(title).borders(Borders::ALL);
-    f.render_widget(outer_block, area);
+    f.render_widget(
+        Block::default().title(title).borders(Borders::ALL),
+        area,
+    );
 
-    let mut constraints = vec![Constraint::Length(3), Constraint::Length(3)];
-    if app.auth.transport == TransportKind::Web {
-        constraints.push(Constraint::Length(3));
+    let web = app.auth.transport == TransportKind::Web;
+    let mut constraints = vec![Constraint::Length(3)]; // instance
+    if web {
+        constraints.push(Constraint::Length(3)); // email
     }
-    constraints.push(Constraint::Length(3));
-    if app.auth.transport == TransportKind::Web {
-        constraints.push(Constraint::Length(3));
+    constraints.push(Constraint::Length(3)); // password / token
+    constraints.push(Constraint::Length(3)); // buttons
+    if web {
+        constraints.push(Constraint::Length(3)); // imported session
     }
-    constraints.push(Constraint::Min(1));
+    constraints.push(Constraint::Min(1)); // hint / failure
 
     let chunks = Layout::default()
         .margin(2)
         .constraints(constraints)
         .split(area);
 
-    let mut row = 0;
-
-    let instance_style = if matches!(app.auth.input_mode, Some(InputMode::LoginUsername)) {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
+    let mut index = 0;
+    let focused = |mode: InputMode| {
+        if app.auth.input_mode == Some(mode) {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        }
     };
+
     f.render_widget(
         Paragraph::new(app.auth.current_input.as_str())
             .block(
@@ -49,120 +55,94 @@ pub fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
                     .borders(Borders::ALL)
                     .title("Instance (har.mony.lol)"),
             )
-            .style(instance_style),
-        chunks[row],
+            .style(focused(InputMode::LoginUsername)),
+        chunks[index],
     );
-    row += 1;
+    let instance_row = index;
+    index += 1;
 
-    let mut email_row: Option<usize> = None;
-    if app.auth.transport == TransportKind::Web {
-        let email_style = if matches!(app.auth.input_mode, Some(InputMode::LoginEmail)) {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
+    let mut email_row = None;
+    if web {
         f.render_widget(
             Paragraph::new(app.auth.email_input.as_str())
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("Account email"),
-                )
-                .style(email_style),
-            chunks[row],
+                .block(Block::default().borders(Borders::ALL).title("Account email"))
+                .style(focused(InputMode::LoginEmail)),
+            chunks[index],
         );
-        email_row = Some(row);
-        row += 1;
+        email_row = Some(index);
+        index += 1;
     }
 
-    let secret_style = if matches!(app.auth.input_mode, Some(InputMode::LoginPassword)) {
-        Style::default().fg(Color::Yellow)
+    let secret_text = if app.auth.reveal_secret {
+        app.auth.password_input.clone()
     } else {
-        Style::default()
+        "*".repeat(app.auth.password_input.len())
     };
     f.render_widget(
-        Paragraph::new("*".repeat(app.auth.password_input.len()))
+        Paragraph::new(secret_text)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .title(format!("{}  (Ctrl-R reveals)", app.auth.secret_label())),
             )
-            .style(secret_style),
-        chunks[row],
+            .style(focused(InputMode::LoginPassword)),
+        chunks[index],
     );
-    let secret_row = row;
-    row += 1;
+    let secret_row = index;
+    index += 1;
 
-    let button_area = Layout::default()
-        .margin(1)
-        .constraints([Constraint::Length(3)])
-        .split(chunks[row])[0];
-    let button_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(26),
-            Constraint::Percentage(26),
-            Constraint::Percentage(24),
-            Constraint::Percentage(24),
-        ])
-        .split(button_area);
-
-    let submit_style = if matches!(app.auth.input_mode, Some(InputMode::AuthSubmit)) {
-        Style::default().bg(Color::Cyan).fg(Color::Black)
-    } else {
-        Style::default()
+    // Buttons: sign in, transport, imported session, account creation.
+    let buttons = Layout::horizontal([
+        Constraint::Percentage(26),
+        Constraint::Percentage(26),
+        Constraint::Percentage(24),
+        Constraint::Percentage(24),
+    ])
+    .split(chunks[index]);
+    let style_for = |mode: InputMode| {
+        if app.auth.input_mode == Some(mode) {
+            Style::default().bg(Color::Cyan).fg(Color::Black)
+        } else {
+            Style::default()
+        }
     };
     f.render_widget(
-        Paragraph::new(Span::styled("[ SIGN IN ]", submit_style)).alignment(Alignment::Center),
-        button_chunks[0],
+        Paragraph::new(Span::styled("[ SIGN IN ]", style_for(InputMode::AuthSubmit)))
+            .alignment(Alignment::Center),
+        buttons[0],
     );
-
-    let transport_style = if matches!(app.auth.input_mode, Some(InputMode::AuthTransport)) {
-        Style::default().bg(Color::Green).fg(Color::Black)
-    } else {
-        Style::default()
-    };
     f.render_widget(
         Paragraph::new(Span::styled(
             format!("[ {} ⇄ ]", app.auth.transport_label()),
-            transport_style,
+            style_for(InputMode::AuthTransport),
         ))
         .alignment(Alignment::Center),
-        button_chunks[1],
+        buttons[1],
     );
-
-    let session_style = if matches!(app.auth.input_mode, Some(InputMode::AuthSession)) {
-        Style::default().bg(Color::Yellow).fg(Color::Black)
-    } else {
-        Style::default()
-    };
     f.render_widget(
-        Paragraph::new(Span::styled("[ SSO session ]", session_style))
-            .alignment(Alignment::Center),
-        button_chunks[2],
+        Paragraph::new(Span::styled(
+            "[ SSO session ]",
+            style_for(InputMode::AuthSession),
+        ))
+        .alignment(Alignment::Center),
+        buttons[2],
     );
-
-    let switch_style = if matches!(app.auth.input_mode, Some(InputMode::AuthSwitch)) {
-        Style::default().bg(Color::Magenta).fg(Color::Black)
-    } else {
-        Style::default()
-    };
     f.render_widget(
-        Paragraph::new(Span::styled("[ Create account ]", switch_style))
-            .alignment(Alignment::Center),
-        button_chunks[3],
+        Paragraph::new(Span::styled(
+            "[ Create account ]",
+            style_for(InputMode::AuthSwitch),
+        ))
+        .alignment(Alignment::Center),
+        buttons[3],
     );
+    index += 1;
 
-    if app.auth.transport == TransportKind::Web {
-        let session_style = if matches!(app.auth.input_mode, Some(InputMode::LoginSession)) {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
+    let mut session_row = None;
+    if web {
         let masked = if app.auth.session_input.is_empty() {
             String::new()
         } else {
-            format!("<{} characters pasted>", app.auth.session_input.len())
+            format!("<{} characters>", app.auth.session_input.len())
         };
         f.render_widget(
             Paragraph::new(masked)
@@ -171,10 +151,11 @@ pub fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
                         .borders(Borders::ALL)
                         .title("SSO session: sb-…-auth-token JSON, or an access token"),
                 )
-                .style(session_style),
-            chunks[row],
+                .style(focused(InputMode::LoginSession)),
+            chunks[index],
         );
-        row += 1;
+        session_row = Some(index);
+        index += 1;
     }
 
     let hint = match app.auth.transport {
@@ -183,52 +164,52 @@ pub fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
         }
         TransportKind::Web => "Your own account: email and password, as on the instance's web app.",
     };
-    let hint_area = chunks[row.saturating_add(1).min(chunks.len() - 1)];
     let hint_text = match app.startup.instance.as_deref() {
         Some(startup) => format!("{hint}  Starting instance: {startup}"),
         None => hint.to_string(),
     };
     let lines = if let Some(error) = app.auth_error.as_deref() {
-        // Keep the failure on screen: the fields are not cleared, so the user
-        // can fix a typo and retry.
         vec![
             ratatui::text::Line::from(Span::styled(
                 format!("Sign-in failed: {error}"),
                 Style::default().fg(Color::Red),
             )),
             ratatui::text::Line::from(""),
-            ratatui::text::Line::from(Span::styled(hint_text, Style::default().fg(Color::Gray))),
+            ratatui::text::Line::from(Span::styled(
+                hint_text,
+                Style::default().fg(Color::Gray),
+            )),
         ]
     } else {
-        vec![ratatui::text::Line::from(Span::styled(
-            hint_text,
-            Style::default(),
-        ))]
+        vec![ratatui::text::Line::from(Span::styled(hint_text, Style::default()))]
     };
     f.render_widget(
         Paragraph::new(lines)
             .alignment(Alignment::Center)
             .wrap(ratatui::widgets::Wrap { trim: true }),
-        hint_area,
+        chunks[index],
     );
 
     match app.auth.input_mode {
         Some(InputMode::LoginUsername) => f.set_cursor_position((
-            chunks[0].x + app.auth.current_input.len() as u16 + 1,
-            chunks[0].y + 1,
+            chunks[instance_row].x + app.auth.current_input.len() as u16 + 1,
+            chunks[instance_row].y + 1,
         )),
+        Some(InputMode::LoginEmail) => {
+            let row = email_row.unwrap_or(secret_row);
+            f.set_cursor_position((
+                chunks[row].x + app.auth.email_input.len() as u16 + 1,
+                chunks[row].y + 1,
+            ))
+        }
         Some(InputMode::LoginPassword) => f.set_cursor_position((
             chunks[secret_row].x + app.auth.password_input.len() as u16 + 1,
             chunks[secret_row].y + 1,
         )),
-        Some(InputMode::LoginEmail) => f.set_cursor_position((
-            chunks[email_row.unwrap_or(1)].x + app.auth.email_input.len() as u16 + 1,
-            chunks[email_row.unwrap_or(1)].y + 1,
-        )),
-        Some(InputMode::LoginSession) => f.set_cursor_position((
-            chunks[secret_row + 2].x + 1,
-            chunks[secret_row + 2].y + 1,
-        )),
+        Some(InputMode::LoginSession) => {
+            let row = session_row.unwrap_or(secret_row);
+            f.set_cursor_position((chunks[row].x + 1, chunks[row].y + 1))
+        }
         _ => {}
     }
 }
