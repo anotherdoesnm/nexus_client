@@ -42,7 +42,9 @@ notify-rust = "4.10"
 
 # Harmony protocol transport.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+# Bundled Mozilla roots, so a static binary does not depend on the host's
+# ca-certificates (reqwest's `rustls-tls` is webpki-roots too).
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 url = "2.5"
 thiserror = "2"
 async-trait = "0.1"

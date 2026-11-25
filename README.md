@@ -43,6 +43,31 @@ Everything is configured by flags or environment; the sign-in screen pre-fills f
 With no credentials the sign-in screen is shown; `Tab` moves between fields, `Enter` submits,
 and the transport button switches bot ⇄ web.
 
+## Binaries
+
+Releases are static **musl** binaries for `x86_64` and `aarch64` — one file, no glibc, no shared
+libraries, so the distro version does not matter:
+
+```
+nexus-tui-client-0.2.0-x86_64-unknown-linux-musl.tar.gz
+nexus-tui-client-0.2.0-aarch64-unknown-linux-musl.tar.gz
+```
+
+They are built by [`.github/workflows/release-binaries.yml`](.github/workflows/release-binaries.yml)
+on every `v*` tag (and on demand from the Actions tab), which uses the cross-rs images so arm64
+builds on an x86 runner. To build them locally:
+
+```bash
+rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+cargo install cargo-zigbuild
+# zig 0.13+ on PATH; it supplies the C toolchain and musl libc
+scripts/build-musl.sh
+```
+
+`nexus-tui-client --version` prints the version and the target it was built for, and
+`nexus-tui-client --check har.mony.lol` probes an instance (discovery document + gateway health)
+with the binary's own TLS stack — the quickest way to check a downloaded binary works.
+
 ## Building
 
 ```bash

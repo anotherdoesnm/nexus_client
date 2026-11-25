@@ -149,8 +149,108 @@ fn parse_transport(value: &str) -> TransportKind {
     }
 }
 
+/// `--check <instance>`: probe the instance's discovery document, its bot
+/// gateway health endpoint, and print the URLs the client would use. Useful to
+/// verify a downloaded binary's TLS stack end to end without credentials.
+fn check_target_in(args: &[String]) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--check" {
+            return iter.next().cloned();
+        }
+        if let Some(value) = arg.strip_prefix("--check=") {
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+async fn check_instance(instance: &str) -> Result<(), Box<dyn Error>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(concat!("nexus-tui/", env!("CARGO_PKG_VERSION")))
+        .build()?;
+    let root = harmony::instance_root(instance)?;
+    println!("instance   {root}");
+
+    match client.get(harmony::instance_info_url(instance)?).send().await {
+        Ok(response) if response.status().is_success() => {
+            let status = response.status();
+            let info: serde_json::Value = response.json().await?;
+            println!(
+                "discovery  {} {} at {} ({status})",
+                info.get("name").and_then(|v| v.as_str()).unwrap_or("?"),
+                info.get("version").and_then(|v| v.as_str()).unwrap_or("?"),
+                info.get("domain").and_then(|v| v.as_str()).unwrap_or("?")
+            );
+        }
+        Ok(response) => println!("discovery  HTTP {}", response.status()),
+        Err(err) => println!("discovery  unreachable: {err}"),
+    }
+
+    let health = root.join("bot-gateway/health")?;
+    match client.get(health).send().await {
+        Ok(response) => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            println!(
+                "gateway    {} ({status}) {}",
+                harmony::gateway_url(instance)?,
+                body.trim()
+            );
+        }
+        Err(err) => println!("gateway    unreachable: {err}"),
+    }
+    Ok(())
+}
+
+/// Print the release identity and exit, so a packaged binary can be checked
+/// without a terminal (and without credentials).
+fn handle_meta_flags() -> bool {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--version" || arg == "-V") {
+        println!(
+            "nexus-tui-client {} ({}-{})",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        );
+        return true;
+    }
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!(
+            "nexus-tui-client {} — a terminal client for Harmony instances\n\n\
+             Usage: nexus-tui-client [options]\n\n\
+             Options:\n  \
+             -i, --instance <host>   Harmony instance (host or URL)\n  \
+             -t, --token <token>     bot token (bot-gateway transport)\n  \
+             -e, --email <email>     account email (web-app transport)\n  \
+             -p, --password <pass>   account password (web-app transport)\n  \
+             -s, --servers <ids>     comma-separated server UUIDs to open (bot transport)\n      \
+             --web | --bot       choose the transport explicitly\n  \
+             --check <host>          probe an instance and exit\n  \
+             -V, --version           print the version and exit\n  \
+             -h, --help              print this help and exit\n\n\
+             Environment: HARMONY_INSTANCE, HARMONY_TOKEN, HARMONY_EMAIL,\n\
+             HARMONY_PASSWORD, HARMONY_SERVERS, HARMONY_TRANSPORT",
+            env!("CARGO_PKG_VERSION")
+        );
+        return true;
+    }
+    false
+}
+
 /// Run the client until the user quits.
 pub async fn run() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(instance) = check_target_in(&args) {
+        return check_instance(&instance).await;
+    }
+    if handle_meta_flags() {
+        return Ok(());
+    }
     global_prefs::init_global_prefs();
 
     enable_raw_mode()?;
@@ -324,6 +424,21 @@ mod tests {
             Ok(Command::GetServers) => {}
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn check_flag_finds_its_instance() {
+        let args = |list: &[&str]| list.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            check_target_in(&args(&["--check", "har.mony.lol"])),
+            Some("har.mony.lol".to_string())
+        );
+        assert_eq!(
+            check_target_in(&args(&["--instance", "x", "--check=localhost:3002"])),
+            Some("localhost:3002".to_string())
+        );
+        assert_eq!(check_target_in(&args(&["--check"])), None);
+        assert_eq!(check_target_in(&args(&["--version"])), None);
     }
 
     #[test]
