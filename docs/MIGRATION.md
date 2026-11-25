@@ -152,6 +152,11 @@ the `get_user_conversations` row shape and by a session test that drives
 `GetDMUserList`/`GetDirectMessages`/`SendDirectMessage` through a stub transport, asserting the
 peer→conversation mapping and the emitted events.
 
+Two real bugs came out of writing those tests, both fixed here: the DM conversation parser
+stored a message id in `MessageInfo::conversation_id`, and the web transport read the profile
+through `rest_get` before the session was stored, so every sign-in silently fell back to a
+`user-<hex>` handle instead of the account's username.
+
 The original tree did not compile against current dependency versions (`cargo check` failed on
 the TLS/bincode block and on `rodio`); with the protocol layer replaced it builds, and
 `--no-default-features` builds without ALSA.

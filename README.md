@@ -55,6 +55,10 @@ cargo clippy --all-targets
 Audio is opt-in because it needs ALSA; the `audio` feature is the only thing that pulls in
 `rodio`.
 
+The dependency tree is large: a debug build with full debug info plus incremental state can fill
+a small disk. Either build with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0`, or keep
+`target/` off the system disk.
+
 ## How the rewrite is laid out
 
 ```
