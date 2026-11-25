@@ -426,25 +426,9 @@ impl WebTransport {
         let gotrue: GoTrueSession = response.json().await.map_err(HarmonyError::from)?;
         let auth_user_id = gotrue.user.id;
 
-        // The profile row is keyed by `auth_user_id`; the username it carries is
-        // the display handle everywhere else in the app.
-        let profiles = self
-            .rest_get(&format!(
-                "profiles?auth_user_id=eq.{auth_user_id}&select=id,username,display_name,avatar_url,is_admin&limit=1"
-            ))
-            .await
-            .unwrap_or_default();
-        let profile: ProfileRow = profiles
-            .first()
-            .and_then(|row| serde_json::from_value(row.clone()).ok())
-            .unwrap_or_default();
-        let profile_id = profile.id_uuid().unwrap_or(auth_user_id);
-        let username = profile
-            .username
-            .clone()
-            .unwrap_or_else(|| format!("user-{}", &auth_user_id.to_string()[..8]));
-
-        let session = WebSession {
+        // Store the session before reading the profile: `rest_get` carries the
+        // session's token, and during sign-in there is nothing in the slot yet.
+        let mut session = WebSession {
             instance: self.instance.clone(),
             supabase_url: Url::parse(&info.supabase_url)
                 .map_err(|e| HarmonyError::protocol(format!("bad Supabase URL: {e}")))?,
@@ -452,14 +436,32 @@ impl WebTransport {
             access_token: gotrue.access_token,
             refresh_token: gotrue.refresh_token,
             auth_user_id,
-            profile_id,
-            username,
+            profile_id: auth_user_id,
+            username: format!("user-{}", &auth_user_id.to_string()[..8]),
         };
+        *self.session.lock().expect("session lock") = Some(session.clone());
+
+        // The profile row is keyed by `auth_user_id`; the username it carries is
+        // the display handle everywhere else in the app.
+        let profiles = self
+            .rest_get(&format!(
+                "profiles?auth_user_id=eq.{auth_user_id}&select=id,username,display_name,avatar_url,is_admin,bio&limit=1"
+            ))
+            .await
+            .unwrap_or_default();
+        let profile: ProfileRow = profiles
+            .first()
+            .and_then(|row| serde_json::from_value(row.clone()).ok())
+            .unwrap_or_default();
+        session.profile_id = profile.id_uuid().unwrap_or(auth_user_id);
+        if let Some(username) = profile.username.clone() {
+            session.username = username;
+        }
         *self.session.lock().expect("session lock") = Some(session.clone());
         self.profiles
             .lock()
             .expect("profiles lock")
-            .insert(profile_id, profile);
+            .insert(session.profile_id, profile);
         Ok(session)
     }
 

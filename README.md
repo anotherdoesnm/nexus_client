@@ -48,7 +48,7 @@ and the transport button switches bot ⇄ web.
 ```bash
 cargo build                 # no audio: no system packages needed (CI-friendly)
 cargo build --features audio # MP3 UI sounds; needs ALSA (libasound2-dev) on Linux
-cargo test                  # 47 unit tests + 8 protocol integration tests
+cargo test                  # 47 unit tests + 12 protocol integration tests
 cargo clippy --all-targets
 ```
 
@@ -77,6 +77,7 @@ docs/protocol-bot.md     the bot protocol, digested from Harmony's docs and gate
 docs/protocol-web.md     the web app's protocol: tables, RPCs, Realtime topics, gotchas
 tests/harmony_bot.rs     end-to-end tests against a mock instance (REST + WebSocket)
 tests/harmony_realtime.rs a mock Realtime socket checking the private join and a broadcast
+tests/harmony_web.rs      a mock Harmony/Supabase: discovery, GoTrue, PostgREST, DM RPCs, sends
 tests/fixtures/bot/      Harmony's own documented payloads, used by those tests
 ```
 

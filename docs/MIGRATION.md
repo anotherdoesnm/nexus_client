@@ -134,7 +134,7 @@ participant", not "no messages").
 ## How this was verified
 
 ```
-cargo test              # 47 unit + 8 integration
+cargo test              # 47 unit + 12 integration
 cargo clippy --all-targets
 ```
 
