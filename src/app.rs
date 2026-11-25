@@ -628,11 +628,18 @@ impl<'a> App<'a> {
                 self.connection = ConnectionState::Online;
                 let label = format!("Connected to {instance} via {}", transport.label());
                 self.set_notification(label, Some(4000), false);
-                if !capabilities.server_listing {
+                // The bot API has no route that lists a bot's installations. Only
+                // complain when that actually left the client with nothing.
+                if !capabilities.server_listing && self.chat.servers.is_empty() {
                     self.unsupported = Some(
-                        "Harmony's bot API cannot list the servers a bot is installed in: start with \
-                         --servers <id,id> (or HARMONY_SERVERS) to open them."
+                        "Harmony's bot API cannot list the servers a bot is installed in. Start with \
+                         --servers <uuid,uuid> (or HARMONY_SERVERS) to open them."
                             .to_string(),
+                    );
+                    self.set_notification(
+                        "No servers to show: pass --servers <uuid,uuid>",
+                        None,
+                        false,
                     );
                 }
                 if !unavailable_servers.is_empty() {

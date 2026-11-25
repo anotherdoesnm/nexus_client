@@ -51,17 +51,19 @@ codec, and the four `rustls` crates. `src/domain.rs` now owns the client's vocab
 
 ## Capabilities the UI reads
 
-`Capabilities` (in `src/domain.rs`) is what a transport claims. Bot sessions say
-`server_listing: false` — and the app tells the user to pass `--servers`; the old client
-never had to, because the Nexus server listed them.
+`Capabilities` (in `src/domain.rs`) is what a transport claims; the constants are written to
+match what is implemented, not what the protocol could eventually do. Bot sessions say
+`server_listing: false`, and when `--servers` left the list empty the app says so; the old
+client never had to, because the Nexus server listed them.
 
 | Field | Bot | Web |
 |---|---|---|
 | `server_listing` | no | yes |
 | `direct_messages` | no | no (data reachable, screens pending) |
 | `forums` | no | no |
-| `threads`, `reactions`, `message_edit`, `attachments` | yes | partial |
-| `presence`, `typing`, `voice`, `encrypted_channels` | no | no (Realtime not implemented) |
+| `message_edit`, `attachments` | yes | yes (edit via PATCH; attachments are read-only) |
+| `threads`, `reactions` | no (no thread/reaction UI yet) | no |
+| `presence`, `typing`, `voice`, `encrypted_channels` | no | no (Realtime and E2EE not implemented) |
 
 ## Gotchas a Harmony client has to live with
 

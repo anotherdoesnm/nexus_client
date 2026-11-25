@@ -458,13 +458,17 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
+    /// What the bot-gateway transport actually implements today: servers,
+    /// channels, message history and sends, edits and deletes, and gateway
+    /// events. No threads UI, no reaction UI, no presence (the protocol has
+    /// none), no DMs, no forums.
     pub const fn bot() -> Self {
         Self {
             server_listing: false,
             direct_messages: false,
             forums: false,
-            threads: true,
-            reactions: true,
+            threads: false,
+            reactions: false,
             presence: false,
             typing: false,
             voice: false,
@@ -474,17 +478,20 @@ impl Capabilities {
         }
     }
 
+    /// What the web transport actually implements today: discovery, GoTrue
+    /// sign-in, PostgREST reads/writes, message parts with attachments. Live
+    /// updates (Realtime), DMs, reactions and E2EE are not wired up yet.
     pub const fn web() -> Self {
         Self {
             server_listing: true,
-            direct_messages: true,
+            direct_messages: false,
             forums: false,
-            threads: true,
-            reactions: true,
-            presence: true,
-            typing: true,
-            voice: true,
-            encrypted_channels: true,
+            threads: false,
+            reactions: false,
+            presence: false,
+            typing: false,
+            voice: false,
+            encrypted_channels: false,
             message_edit: true,
             attachments: true,
         }
