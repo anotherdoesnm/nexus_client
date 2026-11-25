@@ -440,6 +440,7 @@ impl Session {
         let Some(transport) = self.transport.clone() else {
             return self.not_signed_in();
         };
+        transport.watch_channel(channel_id).await;
         match transport.messages(channel_id, before, limit).await {
             Ok(messages) => {
                 for message in &messages {

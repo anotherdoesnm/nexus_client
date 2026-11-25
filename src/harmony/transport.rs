@@ -212,6 +212,11 @@ pub trait Transport: Send + Sync {
     /// can decode. `Ok(None)` when the resource is gone.
     async fn fetch_image(&self, url: &str) -> Result<Option<String>, HarmonyError>;
 
+    /// Start receiving live events for a channel the user is looking at. The
+    /// bot gateway delivers every channel it may read, so it ignores this; the
+    /// web transport joins that channel's Realtime topic.
+    async fn watch_channel(&self, _channel_id: Uuid) {}
+
     /// Take the event stream. Called once, by the session, when it starts.
     fn take_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<TransportEvent>>;
 

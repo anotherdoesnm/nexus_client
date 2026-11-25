@@ -1,0 +1,16 @@
+{
+  "id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "created_at": "2026-09-14T18:25:41.117003+00:00",
+  "updated_at": "2026-11-20T11:03:55.418372+00:00",
+  "server_id": "0b9e5a61-4c2d-4f7e-8a10-6d3c9b2e5f47",
+  "category": "c2d4f8a0-1e3b-4a5c-9d6f-7e8a1b2c3d40",
+  "name": "general",
+  "description": "Anything and everything.",
+  "type": 0,
+  "order": 0,
+  "slowmode_seconds": 0,
+  "ap_id": null,
+  "is_remote": false,
+  "federation_status": "completed",
+  "host_flags": {}
+}

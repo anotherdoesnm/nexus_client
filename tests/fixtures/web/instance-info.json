@@ -1,0 +1,32 @@
+{
+  "success": true,
+  "name": "Harmony",
+  "domain": "har.mony.lol",
+  "version": "1.9.8",
+  "supabaseUrl": "https://db.har.mony.lol",
+  "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhhcm1vbnkiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTc2MDAwMDAwMCwiZXhwIjoyMDc1NTc2MDAwfQ.PLACEHOLDER-SIGNATURE-NOT-A-REAL-KEY",
+  "capabilities": [
+    "encrypted-history",
+    "outgoing-webhooks",
+    "channel-create-options",
+    "instance-staff-roles",
+    "custom-stickers",
+    "server-directory",
+    "instance-invites",
+    "federated-polls",
+    "supporter-messages",
+    "signup-limits",
+    "signup-captcha",
+    "thread-departures",
+    "invite-widgets",
+    "instance-limits",
+    "signup-review",
+    "account-removal",
+    "channel-host-flags",
+    "following-import",
+    "bot-commands",
+    "voice-announce",
+    "member-directory",
+    "signal-relay"
+  ]
+}

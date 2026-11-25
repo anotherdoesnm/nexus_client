@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use url::Url;
 use uuid::Uuid;
 
@@ -23,6 +23,7 @@ use crate::domain::{Capabilities, ChannelKind, TransportKind};
 
 use super::error::HarmonyError;
 use super::model::parse_timestamp;
+use super::realtime::{RealtimeClient, RealtimeConfig, RealtimeUpdate};
 use super::transport::{
     Account, AttachmentInfo, AuthorInfo, ChannelInfo, MemberInfo, MessageInfo, ProfileInfo,
     ReactionInfo, ServerInfo, Transport, TransportEvent,
@@ -86,6 +87,7 @@ pub struct WebTransport {
     profiles: Mutex<HashMap<Uuid, ProfileRow>>,
     events_rx: Mutex<Option<mpsc::UnboundedReceiver<TransportEvent>>>,
     events_tx: mpsc::UnboundedSender<TransportEvent>,
+    realtime: Mutex<Option<RealtimeHandle>>,
     closed: AtomicBool,
 }
 
@@ -114,6 +116,12 @@ impl ProfileRow {
 
 }
 
+/// The live Realtime socket once a channel is on screen.
+struct RealtimeHandle {
+    topics: watch::Sender<Vec<String>>,
+    shutdown: watch::Sender<bool>,
+}
+
 impl WebTransport {
     pub fn new(
         instance: impl Into<String>,
@@ -136,6 +144,7 @@ impl WebTransport {
             profiles: Mutex::new(HashMap::new()),
             events_rx: Mutex::new(Some(events_rx)),
             events_tx,
+            realtime: Mutex::new(None),
             closed: AtomicBool::new(false),
         })
     }
@@ -248,6 +257,46 @@ impl WebTransport {
         }
         let text = response.text().await.unwrap_or_default();
         Err(postgrest_error(status.as_u16(), &text))
+    }
+
+    /// Open the Realtime socket once and subscribe to a channel's topic.
+    fn start_realtime(&self) -> Result<(), HarmonyError> {
+        let mut guard = self.realtime.lock().expect("realtime lock");
+        if guard.is_some() {
+            return Ok(());
+        }
+        let session = self.session()?;
+        let info = self
+            .info
+            .lock()
+            .expect("info lock")
+            .clone()
+            .ok_or_else(|| HarmonyError::protocol("instance not discovered"))?;
+        let config = RealtimeConfig::for_supabase(
+            &info.supabase_url,
+            &info.supabase_anon_key,
+            session.access_token.clone(),
+        )?;
+        let client = RealtimeClient::new(config);
+        let (topics_tx, topics_rx) = watch::channel(Vec::new());
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (updates_tx, updates_rx) = mpsc::unbounded_channel();
+        let events = self.events_tx.clone();
+        let http = self.http.clone();
+        let instance = self.instance.clone();
+
+        tokio::spawn(async move {
+            client.run(topics_rx, updates_tx, shutdown_rx).await;
+        });
+        tokio::spawn(forward_realtime(
+            updates_rx, http, info, session, instance, events,
+        ));
+
+        *guard = Some(RealtimeHandle {
+            topics: topics_tx,
+            shutdown: shutdown_tx,
+        });
+        Ok(())
     }
 
     fn session(&self) -> Result<WebSession, HarmonyError> {
@@ -430,6 +479,316 @@ impl WebTransport {
             bot: false,
         }
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Realtime mapping
+// ---------------------------------------------------------------------------
+
+/// Turn Realtime frames into the events the session consumes.
+async fn forward_realtime(
+    mut updates: mpsc::UnboundedReceiver<RealtimeUpdate>,
+    http: reqwest::Client,
+    info: InstanceInfo,
+    session: WebSession,
+    instance: String,
+    events: mpsc::UnboundedSender<TransportEvent>,
+) {
+    while let Some(update) = updates.recv().await {
+        match update {
+            RealtimeUpdate::Joined { topic } => {
+                tracing::debug!("harmony: realtime joined {topic}");
+            }
+            RealtimeUpdate::Broadcast {
+                topic,
+                event,
+                payload,
+            } => match event.as_str() {
+                "message_event" => {
+                    forward_message_event(&http, &info, &session, &instance, &events, payload).await
+                }
+                "reaction_event" => forward_reaction_event(&session, &events, &topic, payload),
+                other => tracing::debug!("harmony: realtime event {other} is not handled"),
+            },
+            RealtimeUpdate::ChannelError { topic, message } => {
+                let _ = events.send(TransportEvent::Notice(format!(
+                    "Realtime refused {topic}: {message}"
+                )));
+            }
+            RealtimeUpdate::Error(message) => {
+                let _ = events.send(TransportEvent::Notice(format!("Realtime: {message}")));
+            }
+            RealtimeUpdate::Disconnected {
+                reason,
+                will_reconnect,
+            } => {
+                let _ = events.send(TransportEvent::Disconnected {
+                    reason: format!("Realtime: {reason}"),
+                    will_reconnect,
+                });
+            }
+        }
+    }
+}
+
+async fn forward_message_event(
+    http: &reqwest::Client,
+    info: &InstanceInfo,
+    session: &WebSession,
+    instance: &str,
+    events: &mpsc::UnboundedSender<TransportEvent>,
+    payload: Value,
+) {
+    let op = payload
+        .get("op")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    // On DELETE the row is in `old`.
+    let row = if op == "DELETE" {
+        payload.get("old")
+    } else {
+        payload.get("new")
+    };
+    let Some(row) = row.filter(|row| row.is_object()) else {
+        return;
+    };
+    let Some(channel_id) = row
+        .get("channel_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
+    else {
+        return;
+    };
+    let Some(message_id) = row
+        .get("id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
+    else {
+        return;
+    };
+
+    match op {
+        "DELETE" => {
+            let _ = events.send(TransportEvent::MessageDelete {
+                channel_id,
+                message_id,
+            });
+        }
+        "INSERT" | "UPDATE" => {
+            // A restricted message arrives as ids only; skip it rather than
+            // rendering an empty row.
+            if row
+                .get("restricted")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+                || row.get("content").is_none()
+                || row
+                    .get("is_deleted")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+            {
+                return;
+            }
+            let message =
+                live_message(http, info, session, instance, row, channel_id, message_id).await;
+            let _ = events.send(if op == "INSERT" {
+                TransportEvent::MessageCreate(message)
+            } else {
+                TransportEvent::MessageUpdate(message)
+            });
+        }
+        _ => {}
+    }
+}
+
+fn forward_reaction_event(
+    session: &WebSession,
+    events: &mpsc::UnboundedSender<TransportEvent>,
+    topic: &str,
+    payload: Value,
+) {
+    let Some(channel_id) = topic
+        .strip_prefix("channel-messages-")
+        .and_then(|id| Uuid::parse_str(id).ok())
+    else {
+        return;
+    };
+    let Some(message_id) = payload
+        .get("message_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
+    else {
+        return;
+    };
+    let emoji = payload
+        .get("custom_emoji_content")
+        .and_then(|value| value.as_str())
+        .or_else(|| payload.get("emoji_name").and_then(|value| value.as_str()))
+        .unwrap_or("?")
+        .to_string();
+    let by_me = payload
+        .get("user_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(|id| id == session.profile_id)
+        .unwrap_or(false);
+    let kind = payload.get("type").and_then(|value| value.as_str()).unwrap_or("");
+    let _ = events.send(if kind == "reaction:delete" {
+        TransportEvent::ReactionRemove {
+            channel_id,
+            message_id,
+            emoji,
+            by_me,
+        }
+    } else {
+        TransportEvent::ReactionAdd {
+            channel_id,
+            message_id,
+            emoji,
+            by_me,
+        }
+    });
+}
+
+async fn live_message(
+    http: &reqwest::Client,
+    info: &InstanceInfo,
+    session: &WebSession,
+    instance: &str,
+    row: &Value,
+    channel_id: Uuid,
+    message_id: Uuid,
+) -> MessageInfo {
+    let (content, attachments) = render_content(row.get("content").unwrap_or(&Value::Null));
+    let author_id = row
+        .get("user_id")
+        .or_else(|| row.get("bot_id"))
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok());
+    let author = match author_id {
+        Some(id) => Some(fetch_author(http, info, session, instance, id).await),
+        None => None,
+    };
+    let created = row
+        .get("created_at")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let updated = row
+        .get("updated_at")
+        .and_then(|value| value.as_str())
+        .unwrap_or(created);
+    let created_at = parse_timestamp(created);
+    let edited = parse_timestamp(updated);
+    MessageInfo {
+        id: message_id,
+        channel_id,
+        thread_id: row
+            .get("thread_id")
+            .and_then(|value| value.as_str())
+            .and_then(|value| Uuid::parse_str(value).ok()),
+        author,
+        content,
+        timestamp: created_at,
+        edited: if edited > created_at { Some(edited) } else { None },
+        reply_to: row
+            .get("reply_to")
+            .and_then(|value| value.as_str())
+            .and_then(|value| Uuid::parse_str(value).ok()),
+        attachments,
+        reactions: Vec::new(),
+        system: row
+            .get("is_system")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+    }
+}
+
+async fn fetch_author(
+    http: &reqwest::Client,
+    info: &InstanceInfo,
+    session: &WebSession,
+    instance: &str,
+    profile_id: Uuid,
+) -> AuthorInfo {
+    let url = format!(
+        "{}/rest/v1/profiles?id=eq.{profile_id}&select=id,username,display_name,avatar_url,is_admin&limit=1",
+        info.supabase_url.trim_end_matches('/')
+    );
+    let row = http
+        .get(url)
+        .header("apikey", &info.supabase_anon_key)
+        .header("Authorization", format!("Bearer {}", session.access_token))
+        .send()
+        .await
+        .ok()
+        .and_then(|response| response.error_for_status().ok());
+    let row = match row {
+        Some(response) => response
+            .json::<Vec<ProfileRow>>()
+            .await
+            .ok()
+            .and_then(|rows| rows.into_iter().next()),
+        None => None,
+    };
+    match row {
+        Some(profile) => AuthorInfo {
+            id: profile.id_uuid().or(Some(profile_id)),
+            raw_id: profile
+                .id
+                .clone()
+                .unwrap_or_else(|| profile_id.to_string()),
+            username: profile
+                .username
+                .clone()
+                .unwrap_or_else(|| format!("user-{}", &profile_id.to_string()[..8])),
+            display_name: profile.display_name.clone(),
+            avatar_url: profile
+                .avatar_url
+                .as_deref()
+                .and_then(|raw| resolve_media_url(info, instance, raw, "avatars")),
+            nickname: None,
+            bot: false,
+        },
+        None => AuthorInfo {
+            id: Some(profile_id),
+            raw_id: profile_id.to_string(),
+            username: format!("user-{}", &profile_id.to_string()[..8]),
+            display_name: None,
+            avatar_url: None,
+            nickname: None,
+            bot: false,
+        },
+    }
+}
+
+fn resolve_media_url(
+    info: &InstanceInfo,
+    instance: &str,
+    raw: &str,
+    bucket: &str,
+) -> Option<String> {
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        return Some(raw.to_string());
+    }
+    if raw.starts_with('/') {
+        let host = info
+            .domain
+            .clone()
+            .unwrap_or_else(|| instance.to_string());
+        return Some(format!("https://{host}{raw}"));
+    }
+    if !looks_like_object_path(raw) {
+        return None;
+    }
+    Some(format!(
+        "{}/storage/v1/render/image/public/{bucket}/{}?width=96&height=96&resize=cover&quality=80",
+        info.supabase_url.trim_end_matches('/'),
+        raw
+    ))
 }
 
 /// Whether a stored media value looks like a Supabase object path rather than
@@ -623,10 +982,9 @@ impl Transport for WebTransport {
             .get(&session.profile_id)
             .cloned()
             .unwrap_or_default();
-        // No realtime socket yet: say so once, plainly.
         let _ = self.events_tx.send(TransportEvent::Notice(
-            "Web transport: live updates need Harmony Realtime, which this build does not speak yet; \
-             use Refresh (F5) to re-read. The bot-gateway transport has live events."
+            "Web transport: live messages arrive for channels you open (Realtime broadcast topics). \
+             Presence, typing and DMs are not wired up yet."
                 .to_string(),
         ));
         let _ = self.events_tx.send(TransportEvent::Connected);
@@ -976,12 +1334,33 @@ impl Transport for WebTransport {
         Ok(Some(format!("data:{mime};base64,{encoded}")))
     }
 
+    async fn watch_channel(&self, channel_id: Uuid) {
+        if let Err(err) = self.start_realtime() {
+            let _ = self
+                .events_tx
+                .send(TransportEvent::Notice(format!("Realtime: {}", err.user_message())));
+            return;
+        }
+        let guard = self.realtime.lock().expect("realtime lock");
+        if let Some(handle) = guard.as_ref() {
+            let mut topics = handle.topics.borrow().clone();
+            let topic = format!("channel-messages-{channel_id}");
+            if !topics.contains(&topic) {
+                topics.push(topic);
+                let _ = handle.topics.send(topics);
+            }
+        }
+    }
+
     fn take_events(&self) -> Option<mpsc::UnboundedReceiver<TransportEvent>> {
         self.events_rx.lock().expect("events lock").take()
     }
 
     async fn shutdown(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.realtime.lock().expect("realtime lock").take() {
+            let _ = handle.shutdown.send(true);
+        }
         *self.session.lock().expect("session lock") = None;
     }
 }

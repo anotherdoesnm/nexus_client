@@ -1,0 +1,67 @@
+{
+  "id": "d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f70",
+  "created_at": "2026-11-25T14:22:09.731204+00:00",
+  "updated_at": "2026-11-25T14:22:09.731204+00:00",
+  "user_id": "3f2a91c4-7b6e-4d1a-9c2f-0a5b8d3e7f21",
+  "bot_id": null,
+  "channel_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "conversation_id": null,
+  "thread_id": null,
+  "reply_to": null,
+  "content": [
+    {
+      "type": "text",
+      "text": "morning "
+    },
+    {
+      "type": "mention",
+      "userId": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+      "username": "bob",
+      "domain": "har.mony.lol",
+      "isLocal": true,
+      "displayName": "Bob"
+    },
+    {
+      "type": "text",
+      "text": " — the TUI build is green "
+    },
+    {
+      "type": "emoji",
+      "emoji": {
+        "id": "e7f8a9b0-c1d2-4e3f-8a4b-5c6d7e8f9a0b",
+        "name": "party_blob",
+        "url": "https://db.har.mony.lol/storage/v1/object/public/emojis/0b9e5a61-4c2d-4f7e-8a10-6d3c9b2e5f47/party_blob-9c1f2a.png"
+      }
+    },
+    {
+      "type": "file",
+      "url": "https://db.har.mony.lol/storage/v1/object/sign/message_media/c/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d/3f2a91c4-7b6e-4d1a-9c2f-0a5b8d3e7f21/2b9d4c6e-8f10-4a2b-9c3d-4e5f60718293.png?token=PLACEHOLDER",
+      "path": "c/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d/3f2a91c4-7b6e-4d1a-9c2f-0a5b8d3e7f21/2b9d4c6e-8f10-4a2b-9c3d-4e5f60718293.png",
+      "fileName": "tui-green.png",
+      "fileSize": 48213,
+      "fileType": "image",
+      "mimeType": "image/png",
+      "width": 1280,
+      "height": 720,
+      "altText": "The TUI's message list with a green test run"
+    }
+  ],
+  "is_deleted": false,
+  "is_system": false,
+  "is_pinned": false,
+  "pinned_at": null,
+  "pinned_by": null,
+  "encrypted": false,
+  "encryption_metadata": null,
+  "megolm_session_id": null,
+  "megolm_message_index": null,
+  "reactions": null,
+  "federation_status": "queued",
+  "metadata": {
+    "created_via": "harmony_client",
+    "client_nonce": "0f3c9a72-5d18-4c6b-9e2a-7b4d1f8c3a60"
+  },
+  "media_paths": [
+    "c/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d/3f2a91c4-7b6e-4d1a-9c2f-0a5b8d3e7f21/2b9d4c6e-8f10-4a2b-9c3d-4e5f60718293.png"
+  ]
+}

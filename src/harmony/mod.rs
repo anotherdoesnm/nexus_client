@@ -18,6 +18,7 @@ pub mod bot;
 pub mod error;
 pub mod gateway;
 pub mod model;
+pub mod realtime;
 pub mod rest;
 pub mod session;
 pub mod transport;
