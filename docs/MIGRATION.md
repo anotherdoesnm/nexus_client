@@ -63,7 +63,8 @@ client never had to, because the Nexus server listed them.
 | `forums` | no | no |
 | `message_edit`, `attachments` | yes | yes (edit via PATCH; attachments are read-only) |
 | `threads`, `reactions` | no (no thread/reaction UI yet) | no |
-| `presence`, `typing`, `voice`, `encrypted_channels` | no | no (Realtime and E2EE not implemented) |
+| `presence`, `typing`, `voice`, `encrypted_channels` | no | no (E2EE not implemented) |
+| live messages | yes (gateway) | yes (Realtime broadcast topics for the open channel) |
 
 ## Gotchas a Harmony client has to live with
 
@@ -92,21 +93,48 @@ Verified against `docs/build/*.md` and `bot-gateway/src`, and covered by
     three documented `error` strings, which `HarmonyError` surfaces verbatim; a bot cannot
     see every channel of a server even though `GET /servers/{id}/channels` returns them.
 
+## Realtime on the web transport
+
+Harmony 1.9.x publishes **no** Postgres changes — `supabase_realtime` carries no table, so a
+`postgres_changes` client joins and stays silent. Every event is a Broadcast frame on a
+private topic. The client (`src/harmony/realtime.rs`):
+
+1. opens `wss://<db host>/realtime/v1/websocket?apikey=<anon>&vsn=1.0.0` (the app pins
+   `vsn=1.0.0`; 2.x needs a binary serializer);
+2. joins `channel-messages-<channel id>` with
+   `{"config":{"private":true},"access_token":"<jwt>"}` — a public join succeeds and
+   delivers nothing;
+3. heartbeats `phoenix` every 25 s, reconnects with the gateway's backoff, and re-joins;
+4. unwraps `payload.event` (the trigger name, e.g. `message_event`) and `payload.payload`
+   (the trigger's JSON), then maps `INSERT`/`UPDATE`/`DELETE` to create/update/delete events.
+
+The session asks for a channel's topic when it loads that channel's history
+(`Transport::watch_channel`), so the socket only carries what is on screen. The bot transport
+ignores that call — its gateway already delivers every readable channel.
+
+Things the frames do not give you: `message_event.new` is a 17-key whitelist, so
+`media_paths`, `federation_status`, `reactions`, pins and `megolm_message_index` are absent —
+attachments need a re-read; a restricted message arrives as ids only and is skipped; thread
+replies also arrive on the channel topic, so `thread_id` needs filtering (this client renders
+them in the channel for now); reactions arrive as `reaction_event` with a resolved emoji.
+
 ## How this was verified
 
 ```
-cargo test              # 39 unit + 7 integration
+cargo test              # 43 unit + 8 integration
 cargo clippy --all-targets
 ```
 
 The unit tests cover the pure pieces (URL normalisation, timestamp shapes, error mapping,
-close-code/backoff policy, frame decoding, unknown events, message-part rendering, PostgREST
-error shapes, domain mapping). The integration tests run the real `BotTransport` and
+close-code/backoff policy, gateway and Realtime frame decoding, unknown events, message-part
+rendering, PostgREST error shapes, domain mapping). The integration tests run the real `BotTransport` and
 `GatewayClient` against a mock instance built from Harmony's own documented payloads
 (`tests/fixtures/bot/`): REST reads and mapping, a bad token, `READY` + `MESSAGE_CREATE`
 delivery, a `4004` close (no retry), a heartbeat-timeout close (reconnect), and the transport
-event stream the session consumes. Headless `ratatui` tests render the sign-in screen for both
-transports and drive `AuthSuccess`/`Ready`/`Unsupported` through the app.
+event stream the session consumes, and a mock Realtime socket that refuses anything but a
+private join with the user's JWT and then delivers a documented `message_event` broadcast.
+Headless `ratatui` tests render the sign-in screen for both transports and drive
+`AuthSuccess`/`Ready`/`Unsupported` through the app.
 
 The original tree did not compile against current dependency versions (`cargo check` failed on
 the TLS/bincode block and on `rodio`); with the protocol layer replaced it builds, and

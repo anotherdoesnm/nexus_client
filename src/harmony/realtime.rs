@@ -94,8 +94,7 @@ struct InFrame {
     event: String,
     #[serde(default)]
     payload: Value,
-    #[serde(default, rename = "ref")]
-    reference: Option<Value>,
+    // `ref` is present on every frame; nothing in this client needs it.
 }
 
 /// Decode one server frame into an update, if it is one this client uses.

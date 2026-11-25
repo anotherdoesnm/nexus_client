@@ -22,7 +22,7 @@ Harmony exposes two client-facing protocols. Both sit behind one trait
 | Transport | What it is | What it gives you |
 |---|---|---|
 | **bot-gateway** (default) | `Authorization: Bot <token>` over `/bot-gateway/api/v1` and the `/bot-gateway/gateway` WebSocket — Harmony's documented bot protocol (opcodes 0/1/2/11, identify, heartbeat, reconnect). | Live message events, channels, members, roles, sending, editing, deleting, reactions, threads, invite previews. No DMs, no server enumeration. |
-| **web-app** | The protocol Harmony's own Vue app speaks: `/api/federation/instance-info` discovery, GoTrue sign-in, PostgREST with the user's JWT. | Real accounts, **server enumeration**, DMs' data (tables reachable; screens still to come), message history. No live socket yet. |
+| **web-app** | The protocol Harmony's own Vue app speaks: `/api/federation/instance-info` discovery, GoTrue sign-in, PostgREST with the user's JWT, and Supabase Realtime for live messages. | Real accounts, **server enumeration**, message history, and live messages for the channel on screen (Realtime broadcast topics joined privately with the user's JWT). No presence, typing or DMs yet. |
 
 What each transport cannot do is reported, not hidden: the session answers with
 `Event::Unsupported` and the UI shows the explanation (see "Not in Harmony yet" below).
@@ -48,7 +48,7 @@ and the transport button switches bot ⇄ web.
 ```bash
 cargo build                 # no audio: no system packages needed (CI-friendly)
 cargo build --features audio # MP3 UI sounds; needs ALSA (libasound2-dev) on Linux
-cargo test                  # 39 unit tests + 7 protocol integration tests
+cargo test                  # 43 unit tests + 8 protocol integration tests
 cargo clippy --all-targets
 ```
 
@@ -66,6 +66,7 @@ src/harmony/
   model.rs               Harmony's JSON exactly as the API spells it (+ tolerant timestamps)
   rest.rs                the bot REST routes, with retry/backoff and 429 handling
   gateway.rs             the bot gateway: identify, heartbeat, event decoding, reconnect policy
+  realtime.rs            Supabase Realtime (Phoenix): private joins, heartbeat, broadcasts
   bot.rs                 BotTransport: the bot protocol behind the transport trait
   web.rs                 WebTransport: discovery + GoTrue + PostgREST, behind the same trait
   transport.rs           the trait + the neutral shapes both transports produce
@@ -73,7 +74,9 @@ src/harmony/
 src/lib.rs               app bootstrap, startup/env parsing, headless UI tests
 src/main.rs              `nexus_tui::run()`
 docs/protocol-bot.md     the bot protocol, digested from Harmony's docs and gateway source
+docs/protocol-web.md     the web app's protocol: tables, RPCs, Realtime topics, gotchas
 tests/harmony_bot.rs     end-to-end tests against a mock instance (REST + WebSocket)
+tests/harmony_realtime.rs a mock Realtime socket checking the private join and a broadcast
 tests/fixtures/bot/      Harmony's own documented payloads, used by those tests
 ```
 
@@ -89,8 +92,9 @@ and routes.
 * **Direct messages** exist in the web protocol's tables but no bot route or gateway event
   covers them; the DM screen explains that.
 * **Registration** happens on the instance; the "create account" screen sends you to the web app.
-* **Live updates on the web transport** need Harmony Realtime (Phoenix protocol), which this
-  build does not speak yet — use the bot transport for live events, or `F5` to re-read.
+* **Presence, typing and DMs** on the web transport: the Realtime topics and tables are
+  documented (`docs/protocol-web.md`) but not wired into screens yet. Live channel messages
+  *are* wired: open a channel and new messages arrive over its broadcast topic.
 
 ## Credits and licence
 
