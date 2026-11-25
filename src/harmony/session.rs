@@ -157,10 +157,10 @@ impl Session {
             TransportKind::Bot => {
                 let token = login.token.clone().unwrap_or_default();
                 if token.trim().is_empty() {
+                    self.emit(Event::Connection(ConnectionState::Disconnected));
                     self.emit(Event::AuthFailure(
                         "A bot token is required for the bot-gateway transport".to_string(),
                     ));
-                    self.emit(Event::Connection(ConnectionState::Disconnected));
                     return;
                 }
                 BotTransport::new(instance, token, login.server_ids)
@@ -187,8 +187,9 @@ impl Session {
         let transport = match transport {
             Ok(transport) => transport,
             Err(err) => {
-                self.emit(Event::AuthFailure(err.user_message()));
+                // Connection state first, so the failure is the last word.
                 self.emit(Event::Connection(ConnectionState::Disconnected));
+                self.emit(Event::AuthFailure(err.user_message()));
                 return;
             }
         };
@@ -217,8 +218,8 @@ impl Session {
                 });
             }
             Err(err) => {
-                self.emit(Event::AuthFailure(err.user_message()));
                 self.emit(Event::Connection(ConnectionState::Disconnected));
+                self.emit(Event::AuthFailure(err.user_message()));
             }
         }
     }

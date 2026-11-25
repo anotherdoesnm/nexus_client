@@ -12,6 +12,10 @@ pub enum InputMode {
     AuthSwitch,
     /// Switch between the bot-gateway and web-app protocols.
     AuthTransport,
+    /// The "paste a session" button.
+    AuthSession,
+    /// The session field itself (JSON from the web app, or a bare token).
+    LoginSession,
     /// The register screen's fields (accounts are made on the instance, so this
     /// screen explains rather than submits).
     RegisterUsername,
@@ -33,6 +37,10 @@ pub struct AuthState {
     pub password_input: String,
     /// Account email (web transport).
     pub email_input: String,
+    /// A session imported from the web app, for SSO accounts.
+    pub session_input: String,
+    /// Ctrl-R: show the secret instead of masking it.
+    pub reveal_secret: bool,
     pub transport: TransportKind,
     pub input_mode: Option<InputMode>,
 }
@@ -44,6 +52,8 @@ impl Default for AuthState {
             current_input: String::new(),
             password_input: String::new(),
             email_input: String::new(),
+            session_input: String::new(),
+            reveal_secret: false,
             transport: TransportKind::Bot,
             input_mode: Some(InputMode::LoginUsername),
         }
@@ -70,6 +80,7 @@ impl AuthState {
         self.current_input.clear();
         self.password_input.clear();
         self.email_input.clear();
+        self.session_input.clear();
     }
 
     pub fn set_input_mode(&mut self, mode: InputMode) {

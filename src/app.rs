@@ -38,6 +38,8 @@ pub struct App<'a> {
     pub connection: ConnectionState,
     /// A persistent explanation shown when a screen cannot work yet.
     pub unsupported: Option<String>,
+    /// The last sign-in failure, shown in the form until the next attempt.
+    pub auth_error: Option<String>,
     /// Command line and environment, echoed by the login screen.
     pub startup: crate::Startup,
 
@@ -77,6 +79,7 @@ impl<'a> App<'a> {
             instance: None,
             connection: ConnectionState::Disconnected,
             unsupported: None,
+            auth_error: None,
             startup: crate::Startup::default(),
             background_manager,
             theme_manager,
@@ -178,12 +181,16 @@ impl<'a> App<'a> {
         use chrono::prelude::*;
         match msg {
             Event::AuthSuccess(user) => {
+                self.auth_error = None;
                 self.auth.login(user);
                 self.ui.set_mode(crate::state::AppMode::MainMenu);
                 self.ui.reset_selections();
                 self.sound_manager.play(SoundType::LoginSuccess);
             }
             Event::AuthFailure(reason) => {
+                // Leave the fields alone so a typo can be fixed, and keep the
+                // reason on the form rather than only in the corner.
+                self.auth_error = Some(reason.clone());
                 self.set_notification(format!("Error: {}", reason), None, false);
                 self.sound_manager.play(SoundType::LoginFailure);
             }
@@ -657,12 +664,10 @@ impl<'a> App<'a> {
             }
             Event::Connection(state) => {
                 self.connection = state;
-                if state != ConnectionState::Online {
-                    self.set_notification(
-                        format!("Connection: {}", state.label()),
-                        Some(3000),
-                        true,
-                    );
+                // While signed out the form carries the reason; a "Connection:
+                // offline" line would only cover it up.
+                if state == ConnectionState::Reconnecting && self.auth.current_user.is_some() {
+                    self.set_notification("Reconnecting…".to_string(), Some(3000), true);
                 }
             }
             Event::Unsupported { what, detail } => {

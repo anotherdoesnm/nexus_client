@@ -174,25 +174,9 @@ fn read_session(value: &str) -> (Option<String>, Option<String>) {
     } else {
         value.to_string()
     };
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return (None, None);
-    };
-    (
-        find_key(&parsed, "access_token"),
-        find_key(&parsed, "refresh_token"),
-    )
-}
-
-fn find_key(value: &serde_json::Value, key: &str) -> Option<String> {
-    match value {
-        serde_json::Value::Object(map) => {
-            if let Some(value) = map.get(key).and_then(|value| value.as_str()) {
-                return Some(value.to_string());
-            }
-            map.values().find_map(|value| find_key(value, key))
-        }
-        serde_json::Value::Array(items) => items.iter().find_map(|item| find_key(item, key)),
-        _ => None,
+    match harmony::web::parse_session_json(&raw) {
+        Some((access, refresh)) => (Some(access), refresh),
+        None => (None, None),
     }
 }
 
@@ -467,6 +451,34 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("--servers"));
+    }
+
+    #[test]
+    fn a_failed_sign_in_keeps_the_typed_fields_and_shows_the_reason() {
+        let (mut app, _commands) = headless_app();
+        app.auth.current_input = "har.mony.lol".to_string();
+        app.auth.email_input = "alice@example.com".to_string();
+        app.auth.password_input = "secret".to_string();
+        app.handle_event(Event::AuthFailure(
+            "Invalid login credentials — this instance offers github sign-in".to_string(),
+        ));
+        assert_eq!(app.auth.current_input, "har.mony.lol");
+        assert_eq!(app.auth.email_input, "alice@example.com");
+        assert_eq!(app.auth.password_input, "secret");
+        let error = app.auth_error.as_deref().unwrap_or_default();
+        assert!(error.contains("Invalid login credentials"));
+        // A connection notice must not cover the reason up.
+        app.handle_event(Event::Connection(domain::ConnectionState::Disconnected));
+        let shown = app
+            .notifications
+            .current_notification
+            .as_ref()
+            .map(|(text, _, _)| text.clone())
+            .unwrap_or_default();
+        assert!(
+            shown.contains("Invalid login credentials"),
+            "the reason must stay on screen, got: {shown}"
+        );
     }
 
     #[test]

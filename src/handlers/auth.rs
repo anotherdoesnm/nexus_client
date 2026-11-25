@@ -16,7 +16,12 @@ fn login_focus(transport: TransportKind) -> Vec<crate::state::InputMode> {
         fields.push(InputMode::LoginEmail);
     }
     fields.push(InputMode::LoginPassword);
-    fields.extend([InputMode::AuthTransport, InputMode::AuthSubmit, InputMode::AuthSwitch]);
+    fields.extend([
+        InputMode::AuthSubmit,
+        InputMode::AuthTransport,
+        InputMode::AuthSession,
+        InputMode::AuthSwitch,
+    ]);
     fields
 }
 
@@ -39,6 +44,14 @@ pub fn handle_auth_input(key: KeyEvent, app: &mut App) {
         register_focus()
     };
 
+    // Ctrl-R reveals the secret field so a typo can be seen before submitting.
+    if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+        && key.code == KeyCode::Char('r')
+    {
+        app.auth.reveal_secret = !app.auth.reveal_secret;
+        return;
+    }
+
     match key.code {
         KeyCode::Char(c) => match app.auth.input_mode {
             Some(crate::state::InputMode::LoginUsername)
@@ -46,6 +59,7 @@ pub fn handle_auth_input(key: KeyEvent, app: &mut App) {
             Some(crate::state::InputMode::LoginPassword)
             | Some(crate::state::InputMode::RegisterPassword) => app.auth.password_input.push(c),
             Some(crate::state::InputMode::LoginEmail) => app.auth.email_input.push(c),
+            Some(crate::state::InputMode::LoginSession) => app.auth.session_input.push(c),
             _ => {}
         },
         KeyCode::Backspace => match app.auth.input_mode {
@@ -59,6 +73,9 @@ pub fn handle_auth_input(key: KeyEvent, app: &mut App) {
             }
             Some(crate::state::InputMode::LoginEmail) => {
                 app.auth.email_input.pop();
+            }
+            Some(crate::state::InputMode::LoginSession) => {
+                app.auth.session_input.pop();
             }
             _ => {}
         },
@@ -99,6 +116,13 @@ pub fn handle_auth_input(key: KeyEvent, app: &mut App) {
                 app.auth.toggle_transport();
                 app.auth.input_mode = Some(crate::state::InputMode::LoginPassword);
             }
+            Some(crate::state::InputMode::AuthSession) => {
+                app.auth.transport = TransportKind::Web;
+                app.auth.input_mode = Some(crate::state::InputMode::LoginSession);
+            }
+            Some(crate::state::InputMode::LoginSession) => {
+                submit_session(app);
+            }
             Some(crate::state::InputMode::AuthSubmit) => {
                 if is_login {
                     submit_login(app);
@@ -132,6 +156,40 @@ pub fn handle_auth_input(key: KeyEvent, app: &mut App) {
     }
 }
 
+/// Submit an imported web session (SSO accounts have no password).
+fn submit_session(app: &mut App) {
+    let instance = app.auth.current_input.trim().to_string();
+    if instance.is_empty() {
+        app.set_notification("Enter the instance address first.", None, false);
+        app.sound_manager.play(SoundType::LoginFailure);
+        return;
+    }
+    let raw = app.auth.session_input.trim().to_string();
+    let Some((access_token, refresh_token)) = crate::harmony::web::parse_session_json(&raw) else {
+        app.set_notification(
+            "Paste the web app's sb-…-auth-token JSON, or a bare access token.",
+            None,
+            false,
+        );
+        app.sound_manager.play(SoundType::LoginFailure);
+        return;
+    };
+    let request = LoginRequest {
+        instance,
+        transport: TransportKind::Web,
+        token: None,
+        email: None,
+        password: None,
+        session: Some(crate::domain::SessionTokens {
+            access_token,
+            refresh_token,
+        }),
+        server_ids: Vec::new(),
+    };
+    app.set_notification("Signing in with the imported session…", Some(2000), true);
+    app.send_command(Command::Login(request));
+}
+
 /// Validate the fields and hand the session a login request.
 fn submit_login(app: &mut App) {
     let instance = app.auth.current_input.trim().to_string();
@@ -142,12 +200,18 @@ fn submit_login(app: &mut App) {
     }
 
     let transport = app.auth.transport;
-    let secret = app.auth.password_input.trim().to_string();
+    // A password is taken exactly as typed (it may end in a space); a token is
+    // trimmed because terminals like to add one when pasting.
+    let typed_secret = app.auth.password_input.clone();
+    let secret = match transport {
+        TransportKind::Bot => typed_secret.trim().to_string(),
+        TransportKind::Web => typed_secret,
+    };
     let email = app.auth.email_input.trim().to_string();
 
     let request = match transport {
         TransportKind::Bot => {
-            if secret.is_empty() {
+            if secret.trim().is_empty() {
                 app.set_notification("Paste a bot token (User settings → My bots).", None, false);
                 app.sound_manager.play(SoundType::LoginFailure);
                 return;
@@ -163,7 +227,7 @@ fn submit_login(app: &mut App) {
             }
         }
         TransportKind::Web => {
-            if email.is_empty() || secret.is_empty() {
+            if email.is_empty() || secret.trim().is_empty() {
                 app.set_notification(
                     "The web transport needs the account email and password.",
                     None,
@@ -193,5 +257,6 @@ fn submit_login(app: &mut App) {
         true,
     );
     app.send_command(Command::Login(request));
-    app.auth.clear_inputs();
+    // The fields stay until sign-in succeeds (`AuthState::login` clears them),
+    // so a failure leaves the typo on screen to fix.
 }

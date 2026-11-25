@@ -1235,6 +1235,42 @@ fn looks_like_object_path(raw: &str) -> bool {
             .unwrap_or(false)
 }
 
+/// Parse a session pasted from the web app: the `sb-…-auth-token` JSON, a
+/// nested object holding the tokens, or a bare access token (a JWT).
+pub fn parse_session_json(raw: &str) -> Option<(String, Option<String>)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parsed: Option<Value> = serde_json::from_str(trimmed).ok();
+    if let Some(value) = parsed {
+        let access = find_json_string(&value, "access_token");
+        let refresh = find_json_string(&value, "refresh_token");
+        if let Some(access) = access {
+            return Some((access, refresh));
+        }
+        return None;
+    }
+    // A bare JWT: three dot-separated segments.
+    if trimmed.split('.').count() == 3 && !trimmed.contains(' ') {
+        return Some((trimmed.to_string(), None));
+    }
+    None
+}
+
+fn find_json_string(value: &Value, key: &str) -> Option<String> {
+    match value {
+        Value::Object(map) => {
+            if let Some(found) = map.get(key).and_then(|value| value.as_str()) {
+                return Some(found.to_string());
+            }
+            map.values().find_map(|value| find_json_string(value, key))
+        }
+        Value::Array(items) => items.iter().find_map(|item| find_json_string(item, key)),
+        _ => None,
+    }
+}
+
 /// Read one claim out of a JWT without verifying it: the signature is the
 /// server's business, the client only needs `sub`.
 fn jwt_claim(token: &str, key: &str) -> Option<String> {
@@ -1994,6 +2030,31 @@ mod tests {
         assert!(conversation.is_group);
         assert!(conversation.peer.is_none());
         assert_eq!(conversation.name.as_deref(), Some("Trip"));
+    }
+
+    #[test]
+    fn session_json_parses_from_the_web_app_storage() {
+        let storage = json!({
+            "currentSession": {
+                "access_token": "header.payload.signature",
+                "refresh_token": "refresh-1",
+                "expires_at": 2082758400,
+            },
+            "expiresAt": 2082758400,
+        });
+        let (access, refresh) =
+            parse_session_json(&storage.to_string()).expect("a session");
+        assert_eq!(access, "header.payload.signature");
+        assert_eq!(refresh.as_deref(), Some("refresh-1"));
+
+        let (bare, refresh) =
+            parse_session_json("  header.payload.signature ").expect("a bare token");
+        assert_eq!(bare, "header.payload.signature");
+        assert!(refresh.is_none());
+
+        assert!(parse_session_json("").is_none());
+        assert!(parse_session_json("not a session").is_none());
+        assert!(parse_session_json(r#"{"refresh_token":"only"}"#).is_none());
     }
 
     #[test]
