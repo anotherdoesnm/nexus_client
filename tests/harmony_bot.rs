@@ -520,6 +520,7 @@ async fn a_session_signs_in_loads_servers_and_answers_unsupported_commands() {
         token: Some(TOKEN.to_string()),
         email: None,
         password: None,
+        session: None,
         server_ids: vec![Uuid::parse_str(SERVER_ID).unwrap()],
     };
     let (prefill_tx, prefill_rx) = tokio::sync::oneshot::channel();

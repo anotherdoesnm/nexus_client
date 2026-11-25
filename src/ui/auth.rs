@@ -51,23 +51,7 @@ pub fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
     );
     row += 1;
 
-    let secret_style = if matches!(app.auth.input_mode, Some(InputMode::LoginPassword)) {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
-    f.render_widget(
-        Paragraph::new("*".repeat(app.auth.password_input.len()))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(app.auth.secret_label()),
-            )
-            .style(secret_style),
-        chunks[row],
-    );
-    row += 1;
-
+    let mut email_row: Option<usize> = None;
     if app.auth.transport == TransportKind::Web {
         let email_style = if matches!(app.auth.input_mode, Some(InputMode::LoginEmail)) {
             Style::default().fg(Color::Yellow)
@@ -84,8 +68,27 @@ pub fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
                 .style(email_style),
             chunks[row],
         );
+        email_row = Some(row);
         row += 1;
     }
+
+    let secret_style = if matches!(app.auth.input_mode, Some(InputMode::LoginPassword)) {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new("*".repeat(app.auth.password_input.len()))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(app.auth.secret_label()),
+            )
+            .style(secret_style),
+        chunks[row],
+    );
+    let secret_row = row;
+    row += 1;
 
     let button_area = Layout::default()
         .margin(1)
@@ -162,12 +165,12 @@ pub fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
             chunks[0].y + 1,
         )),
         Some(InputMode::LoginPassword) => f.set_cursor_position((
-            chunks[1].x + app.auth.password_input.len() as u16 + 1,
-            chunks[1].y + 1,
+            chunks[secret_row].x + app.auth.password_input.len() as u16 + 1,
+            chunks[secret_row].y + 1,
         )),
         Some(InputMode::LoginEmail) => f.set_cursor_position((
-            chunks[2].x + app.auth.email_input.len() as u16 + 1,
-            chunks[2].y + 1,
+            chunks[email_row.unwrap_or(1)].x + app.auth.email_input.len() as u16 + 1,
+            chunks[email_row.unwrap_or(1)].y + 1,
         )),
         _ => {}
     }

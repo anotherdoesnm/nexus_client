@@ -40,8 +40,31 @@ Everything is configured by flags or environment; the sign-in screen pre-fills f
 | `--password`, `-p` | `HARMONY_PASSWORD` | Web transport: account password. |
 | `--web` / `--bot` | `HARMONY_TRANSPORT` | Pick the transport explicitly; otherwise a token means bot and an email+password means web. |
 
-With no credentials the sign-in screen is shown; `Tab` moves between fields, `Enter` submits,
-and the transport button switches bot ⇄ web.
+With no credentials the sign-in screen is shown; `Tab` moves between fields (the order is
+instance → email → password, so the identity comes before the secret), `Enter` submits, and the
+transport button switches bot ⇄ web.
+
+### Accounts without a password (GitHub/Google SSO)
+
+Harmony instances can enable external sign-in. An account created through **GitHub SSO** has no
+password, so the password field cannot work for it — the client says so when the instance
+advertises SSO providers. Instead, borrow the session the web app already holds:
+
+1. Sign in to `https://<instance>` in a browser (the SSO button works there).
+2. Open DevTools → Application → Local Storage → `https://<db host>` →
+   `sb-<ref>-auth-token` (or the key ending in `-auth-token`), and copy its value.
+3. Save it and start the client:
+
+```bash
+nexus-tui-client --web --instance har.mony.lol --session session.json
+# or, without a file:
+nexus-tui-client --web --instance har.mony.lol \
+  --access-token '<access_token>' --refresh-token '<refresh_token>'
+```
+
+The refresh token is used automatically when the access token expires (a 401 triggers one refresh
+and one retry). If the refresh token itself has expired, copy a fresh session from the browser.
+The same values can come from `HARMONY_ACCESS_TOKEN` / `HARMONY_REFRESH_TOKEN`.
 
 ## Binaries
 
@@ -73,7 +96,7 @@ with the binary's own TLS stack — the quickest way to check a downloaded binar
 ```bash
 cargo build                 # no audio: no system packages needed (CI-friendly)
 cargo build --features audio # MP3 UI sounds; needs ALSA (libasound2-dev) on Linux
-cargo test                  # 47 unit tests + 12 protocol integration tests
+cargo test                  # 48 unit tests + 14 protocol integration tests
 cargo clippy --all-targets
 ```
 

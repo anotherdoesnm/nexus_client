@@ -166,12 +166,22 @@ impl Session {
                 BotTransport::new(instance, token, login.server_ids)
                     .map(|transport| Arc::new(transport) as Arc<dyn Transport>)
             }
-            TransportKind::Web => {
-                let email = login.email.clone().unwrap_or_default();
-                let password = login.password.clone().unwrap_or_default();
-                super::web::WebTransport::new(instance, email, password)
-                    .map(|transport| Arc::new(transport) as Arc<dyn Transport>)
-            }
+            TransportKind::Web => match login.session.clone() {
+                // An SSO account has no password: the session comes from the
+                // web app, and the refresh token keeps it alive.
+                Some(tokens) => super::web::WebTransport::with_session(
+                    instance,
+                    tokens.access_token,
+                    tokens.refresh_token,
+                )
+                .map(|transport| Arc::new(transport) as Arc<dyn Transport>),
+                None => {
+                    let email = login.email.clone().unwrap_or_default();
+                    let password = login.password.clone().unwrap_or_default();
+                    super::web::WebTransport::new(instance, email, password)
+                        .map(|transport| Arc::new(transport) as Arc<dyn Transport>)
+                }
+            },
         };
 
         let transport = match transport {

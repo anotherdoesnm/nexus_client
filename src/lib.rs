@@ -50,6 +50,10 @@ pub struct Startup {
     pub token: Option<String>,
     pub email: Option<String>,
     pub password: Option<String>,
+    /// An imported web session (`--session <file|json>` or
+    /// `--access-token` + `--refresh-token`), for SSO accounts.
+    pub session_access: Option<String>,
+    pub session_refresh: Option<String>,
     pub server_ids: String,
 }
 
@@ -63,6 +67,8 @@ impl Startup {
             token: env_non_empty("HARMONY_TOKEN"),
             email: env_non_empty("HARMONY_EMAIL"),
             password: env_non_empty("HARMONY_PASSWORD"),
+            session_access: env_non_empty("HARMONY_ACCESS_TOKEN"),
+            session_refresh: env_non_empty("HARMONY_REFRESH_TOKEN"),
             server_ids: std::env::var("HARMONY_SERVERS").unwrap_or_default(),
         };
 
@@ -72,13 +78,20 @@ impl Startup {
             let arg = args[index].as_str();
             match arg {
                 "--instance" | "-i" | "--token" | "-t" | "--email" | "-e" | "--password" | "-p"
-                | "--servers" | "-s" => {
+                | "--servers" | "-s" | "--access-token" | "--refresh-token" | "--session" => {
                     if let Some(value) = args.get(index + 1).cloned() {
                         match arg {
                             "--instance" | "-i" => startup.instance = Some(value),
                             "--token" | "-t" => startup.token = Some(value),
                             "--email" | "-e" => startup.email = Some(value),
                             "--password" | "-p" => startup.password = Some(value),
+                            "--access-token" => startup.session_access = Some(value),
+                            "--refresh-token" => startup.session_refresh = Some(value),
+                            "--session" => {
+                                let (access, refresh) = read_session(&value);
+                                startup.session_access = access.or(startup.session_access);
+                                startup.session_refresh = refresh.or(startup.session_refresh);
+                            }
                             _ => startup.server_ids = value,
                         }
                         index += 2;
@@ -101,7 +114,9 @@ impl Startup {
     pub fn login_request(&self) -> Option<LoginRequest> {
         let instance = self.instance.clone()?;
         let transport = self.transport.unwrap_or_else(|| {
-            if self.email.is_some() && self.password.is_some() && self.token.is_none() {
+            if self.session_access.is_some()
+                || (self.email.is_some() && self.password.is_some() && self.token.is_none())
+            {
                 TransportKind::Web
             } else {
                 TransportKind::Bot
@@ -116,10 +131,25 @@ impl Startup {
                     token: Some(token),
                     email: None,
                     password: None,
+                    session: None,
                     server_ids: harmony::transport::parse_server_ids(&self.server_ids),
                 })
             }
             TransportKind::Web => {
+                if let Some(access_token) = self.session_access.clone() {
+                    return Some(LoginRequest {
+                        instance,
+                        transport,
+                        token: None,
+                        email: None,
+                        password: None,
+                        session: Some(domain::SessionTokens {
+                            access_token,
+                            refresh_token: self.session_refresh.clone(),
+                        }),
+                        server_ids: Vec::new(),
+                    });
+                }
                 let email = self.email.clone()?;
                 let password = self.password.clone()?;
                 Some(LoginRequest {
@@ -128,10 +158,41 @@ impl Startup {
                     token: None,
                     email: Some(email),
                     password: Some(password),
+                    session: None,
                     server_ids: Vec::new(),
                 })
             }
         }
+    }
+}
+
+/// Read `--session`: a file path or inline JSON, and find the token pair at
+/// whatever depth the web app's storage object nests it.
+fn read_session(value: &str) -> (Option<String>, Option<String>) {
+    let raw = if std::path::Path::new(value).exists() {
+        std::fs::read_to_string(value).unwrap_or_default()
+    } else {
+        value.to_string()
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return (None, None);
+    };
+    (
+        find_key(&parsed, "access_token"),
+        find_key(&parsed, "refresh_token"),
+    )
+}
+
+fn find_key(value: &serde_json::Value, key: &str) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(value) = map.get(key).and_then(|value| value.as_str()) {
+                return Some(value.to_string());
+            }
+            map.values().find_map(|value| find_key(value, key))
+        }
+        serde_json::Value::Array(items) => items.iter().find_map(|item| find_key(item, key)),
+        _ => None,
     }
 }
 
@@ -229,12 +290,15 @@ fn handle_meta_flags() -> bool {
              -e, --email <email>     account email (web-app transport)\n  \
              -p, --password <pass>   account password (web-app transport)\n  \
              -s, --servers <ids>     comma-separated server UUIDs to open (bot transport)\n      \
+             --session <file|json>   web session imported from the app (SSO accounts)\n      \
+             --access-token <jwt>    the same, as a bare access token\n      \
+             --refresh-token <jwt>   refresh token to pair with --access-token\n      \
              --web | --bot       choose the transport explicitly\n  \
              --check <host>          probe an instance and exit\n  \
              -V, --version           print the version and exit\n  \
              -h, --help              print this help and exit\n\n\
-             Environment: HARMONY_INSTANCE, HARMONY_TOKEN, HARMONY_EMAIL,\n\
-             HARMONY_PASSWORD, HARMONY_SERVERS, HARMONY_TRANSPORT",
+             Environment: HARMONY_INSTANCE, HARMONY_TOKEN, HARMONY_EMAIL, HARMONY_PASSWORD,\n\
+             HARMONY_SERVERS, HARMONY_TRANSPORT, HARMONY_ACCESS_TOKEN, HARMONY_REFRESH_TOKEN",
             env!("CARGO_PKG_VERSION")
         );
         return true;

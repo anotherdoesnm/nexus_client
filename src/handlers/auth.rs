@@ -9,16 +9,14 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 fn login_focus(transport: TransportKind) -> Vec<crate::state::InputMode> {
     use crate::state::InputMode;
-    let mut fields = vec![
-        InputMode::LoginUsername,
-        InputMode::LoginPassword,
-        InputMode::AuthTransport,
-        InputMode::AuthSubmit,
-        InputMode::AuthSwitch,
-    ];
+    // The identity comes before the secret: instance, then (for the web
+    // transport) the email, then the password or token.
+    let mut fields = vec![InputMode::LoginUsername];
     if transport == TransportKind::Web {
-        fields.insert(2, InputMode::LoginEmail);
+        fields.push(InputMode::LoginEmail);
     }
+    fields.push(InputMode::LoginPassword);
+    fields.extend([InputMode::AuthTransport, InputMode::AuthSubmit, InputMode::AuthSwitch]);
     fields
 }
 
@@ -78,17 +76,17 @@ pub fn handle_auth_input(key: KeyEvent, app: &mut App) {
         }
         KeyCode::Enter => match app.auth.input_mode {
             Some(crate::state::InputMode::LoginUsername) => {
-                app.auth.input_mode = Some(crate::state::InputMode::LoginPassword);
-            }
-            Some(crate::state::InputMode::LoginPassword) => {
                 let next = if app.auth.transport == TransportKind::Web {
                     crate::state::InputMode::LoginEmail
                 } else {
-                    crate::state::InputMode::AuthSubmit
+                    crate::state::InputMode::LoginPassword
                 };
                 app.auth.input_mode = Some(next);
             }
             Some(crate::state::InputMode::LoginEmail) => {
+                app.auth.input_mode = Some(crate::state::InputMode::LoginPassword);
+            }
+            Some(crate::state::InputMode::LoginPassword) => {
                 app.auth.input_mode = Some(crate::state::InputMode::AuthSubmit);
             }
             Some(crate::state::InputMode::RegisterUsername) => {
@@ -160,6 +158,7 @@ fn submit_login(app: &mut App) {
                 token: Some(secret),
                 email: None,
                 password: None,
+                session: None,
                 server_ids: crate::harmony::transport::parse_server_ids(&app.startup.server_ids),
             }
         }
@@ -179,6 +178,7 @@ fn submit_login(app: &mut App) {
                 token: None,
                 email: Some(email),
                 password: Some(secret),
+                session: None,
                 server_ids: Vec::new(),
             }
         }

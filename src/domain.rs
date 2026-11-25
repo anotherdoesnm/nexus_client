@@ -545,6 +545,15 @@ impl Unsupported {
     }
 }
 
+/// A Supabase session imported from the web app, for accounts that have no
+/// password (GitHub/Google SSO): the access token plus the refresh token that
+/// keeps it alive.
+#[derive(Debug, Clone)]
+pub struct SessionTokens {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+}
+
 /// A sign-in request, however the transport authenticates.
 #[derive(Debug, Clone)]
 pub struct LoginRequest {
@@ -556,6 +565,9 @@ pub struct LoginRequest {
     /// Account credentials for [`TransportKind::Web`].
     pub email: Option<String>,
     pub password: Option<String>,
+    /// A session imported from the web app instead of a password; required for
+    /// SSO accounts, which have no password to grant.
+    pub session: Option<SessionTokens>,
     /// Bot sessions start from these server ids: the bot API cannot list them.
     pub server_ids: Vec<Uuid>,
 }

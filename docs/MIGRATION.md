@@ -10,7 +10,7 @@ and `src/harmony/`.
 |---|---|---|
 | Wire | `bincode`-serialised `ClientMessage`/`ServerMessage` enums, length-delimited over TLS | HTTP/JSON against `/bot-gateway/api/v1` **or** PostgREST, plus a WebSocket (`/bot-gateway/gateway`) for events |
 | Connection | `TcpStream` + `tokio-rustls` + `LengthDelimitedCodec` to `host:port` | URLs; TLS by `reqwest`/`tokio-tungstenite` with the platform roots |
-| Auth | `Login { username, password }`, `Register` | Bot transport: a bot token (`Authorization: Bot …`), obtained from the instance's **My bots**. Web transport: GoTrue email/password. No client-side registration (the instance owns accounts). |
+| Auth | `Login { username, password }`, `Register` | Bot transport: a bot token (`Authorization: Bot …`), obtained from the instance's **My bots**. Web transport: GoTrue email/password, or an imported session (`--session`) for SSO accounts that have no password. No client-side registration (the instance owns accounts). |
 | Push | Every server decision arrived as a `ServerMessage` | The gateway's documented events (`READY`, `MESSAGE_CREATE`, `MESSAGE_UPDATE`, `MESSAGE_DELETE`, reactions, member events) |
 | Errors | `AuthFailure(String)`, `Notification(String, bool)` | `HarmonyError` with the API's status/`error`/`code`/`missing_permissions` mapped to a kind, plus a sentence for the UI |
 | Reconnect | Re-open the socket and lose state | Gateway close-code policy table: retry with exponential backoff except `4001`/`4004`; everything is re-read over REST (there is no RESUME) |
@@ -37,7 +37,7 @@ codec, and the four `rustls` crates. `src/domain.rs` now owns the client's vocab
 
 | UI command | Bot transport | Web transport |
 |---|---|---|
-| `Login(LoginRequest)` | `GET /users/@me`, then open the gateway and identify | `/api/federation/instance-info`, GoTrue password grant, then `profiles` by `auth_user_id` |
+| `Login(LoginRequest)` | `GET /users/@me`, then open the gateway and identify | `/api/federation/instance-info`, then either the GoTrue password grant or an imported `--session` token pair (JWT `sub` names the profile; a 401 triggers one refresh-and-retry), then `profiles` by `auth_user_id` |
 | `GetServers` / `Refresh` | one `GET /servers/{id}` per configured id (+ channels) | `user_servers` joined with `servers` |
 | `GetChannelUserList` / `GetServerMembers` | `GET /servers/{id}/members` (paged by `after`, 1000/page) | `user_servers` joined with `profiles` |
 | `GetChannelMessages` | `GET /channels/{id}/messages?limit=&before=` | `messages` by `channel_id`, threaded rows excluded |
@@ -134,7 +134,7 @@ participant", not "no messages").
 ## How this was verified
 
 ```
-cargo test              # 47 unit + 12 integration
+cargo test              # 48 unit + 14 integration
 cargo clippy --all-targets
 ```
 

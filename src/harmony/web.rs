@@ -88,6 +88,9 @@ pub struct WebTransport {
     events_rx: Mutex<Option<mpsc::UnboundedReceiver<TransportEvent>>>,
     events_tx: mpsc::UnboundedSender<TransportEvent>,
     realtime: Mutex<Option<RealtimeHandle>>,
+    /// An access/refresh pair imported from the web app, used instead of the
+    /// password grant (SSO accounts have no password).
+    seed: Mutex<Option<(String, Option<String>)>>,
     closed: AtomicBool,
 }
 
@@ -145,8 +148,21 @@ impl WebTransport {
             events_rx: Mutex::new(Some(events_rx)),
             events_tx,
             realtime: Mutex::new(None),
+            seed: Mutex::new(None),
             closed: AtomicBool::new(false),
         })
+    }
+
+    /// Sign in with a session imported from the web app (the account signed in
+    /// with GitHub/Google SSO, so there is no password to grant).
+    pub fn with_session(
+        instance: impl Into<String>,
+        access_token: impl Into<String>,
+        refresh_token: Option<String>,
+    ) -> Result<Self, HarmonyError> {
+        let transport = Self::new(instance, String::new(), String::new())?;
+        *transport.seed.lock().expect("seed lock") = Some((access_token.into(), refresh_token));
+        Ok(transport)
     }
 
     // -- bootstrap ---------------------------------------------------------
@@ -204,18 +220,28 @@ impl WebTransport {
 
     async fn rest_get(&self, path: &str) -> Result<Vec<Value>, HarmonyError> {
         let info = self.discover().await?;
-        let session = self.session()?;
         let url = self.rest_url(&info, path)?;
-        let response = self
-            .http
-            .get(url)
-            .header("apikey", &info.supabase_anon_key)
-            .header("Authorization", format!("Bearer {}", session.access_token))
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .map_err(HarmonyError::from)?;
-        self.json_rows(response).await
+        let mut refreshed = false;
+        loop {
+            let session = self.session()?;
+            let response = self
+                .http
+                .get(url.clone())
+                .header("apikey", &info.supabase_anon_key)
+                .header("Authorization", format!("Bearer {}", session.access_token))
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .map_err(HarmonyError::from)?;
+            // An expired access token is a 401; the refresh token revives it once.
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
+                refreshed = true;
+                if self.refresh_session().await {
+                    continue;
+                }
+            }
+            return self.json_rows(response).await;
+        }
     }
 
     async fn json_rows(&self, response: reqwest::Response) -> Result<Vec<Value>, HarmonyError> {
@@ -238,25 +264,34 @@ impl WebTransport {
 
     async fn rest_write(&self, method: reqwest::Method, path: &str, body: &Value) -> Result<(), HarmonyError> {
         let info = self.discover().await?;
-        let session = self.session()?;
         let url = self.rest_url(&info, path)?;
-        let response = self
-            .http
-            .request(method, url)
-            .header("apikey", &info.supabase_anon_key)
-            .header("Authorization", format!("Bearer {}", session.access_token))
-            .header("Content-Type", "application/json")
-            .header("Prefer", "return=minimal")
-            .body(body.to_string())
-            .send()
-            .await
-            .map_err(HarmonyError::from)?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(());
+        let mut refreshed = false;
+        loop {
+            let session = self.session()?;
+            let response = self
+                .http
+                .request(method.clone(), url.clone())
+                .header("apikey", &info.supabase_anon_key)
+                .header("Authorization", format!("Bearer {}", session.access_token))
+                .header("Content-Type", "application/json")
+                .header("Prefer", "return=minimal")
+                .body(body.to_string())
+                .send()
+                .await
+                .map_err(HarmonyError::from)?;
+            let status = response.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
+                refreshed = true;
+                if self.refresh_session().await {
+                    continue;
+                }
+            }
+            if status.is_success() {
+                return Ok(());
+            }
+            let text = response.text().await.unwrap_or_default();
+            return Err(postgrest_error(status.as_u16(), &text));
         }
-        let text = response.text().await.unwrap_or_default();
-        Err(postgrest_error(status.as_u16(), &text))
     }
 
     /// Map PostgREST message rows (channel or conversation) onto the neutral
@@ -385,6 +420,11 @@ impl WebTransport {
     }
 
     async fn authenticate(&self) -> Result<WebSession, HarmonyError> {
+        // An imported session skips the password grant entirely.
+        let seed = { self.seed.lock().expect("seed lock").take() };
+        if let Some((access_token, refresh_token)) = seed {
+            return self.authenticate_with_token(access_token, refresh_token).await;
+        }
         let info = self.discover().await?;
         if self.email.trim().is_empty() || self.password.is_empty() {
             return Err(HarmonyError::unauthorized(
@@ -410,7 +450,7 @@ impl WebTransport {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            let message = serde_json::from_str::<Value>(&body)
+            let mut message = serde_json::from_str::<Value>(&body)
                 .ok()
                 .and_then(|value| {
                     value
@@ -420,6 +460,16 @@ impl WebTransport {
                         .and_then(|v| v.as_str().map(str::to_string))
                 })
                 .unwrap_or_else(|| format!("HTTP {status}"));
+            // "Invalid login credentials" on an instance with SSO usually means
+            // the account was created through the provider and has no password.
+            if matches!(
+                status,
+                reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNAUTHORIZED
+            ) {
+                if let Some(hint) = self.sso_hint(&info).await {
+                    message = format!("{message} — {hint}");
+                }
+            }
             return Err(HarmonyError::unauthorized(message));
         }
 
@@ -463,6 +513,132 @@ impl WebTransport {
             .expect("profiles lock")
             .insert(session.profile_id, profile);
         Ok(session)
+    }
+
+    /// Sign in with an imported token pair: the JWT's `sub` names the profile,
+    /// and the refresh token revives an expired access token.
+    async fn authenticate_with_token(
+        &self,
+        access_token: String,
+        refresh_token: Option<String>,
+    ) -> Result<WebSession, HarmonyError> {
+        let info = self.discover().await?;
+        let auth_user_id = jwt_claim(&access_token, "sub")
+            .and_then(|value| Uuid::parse_str(&value).ok())
+            .ok_or_else(|| {
+                HarmonyError::unauthorized(
+                    "the imported session has no sub claim; paste the web app's session JSON",
+                )
+            })?;
+
+        let session = WebSession {
+            instance: self.instance.clone(),
+            supabase_url: Url::parse(&info.supabase_url)
+                .map_err(|e| HarmonyError::protocol(format!("bad Supabase URL: {e}")))?,
+            anon_key: info.supabase_anon_key.clone(),
+            access_token,
+            refresh_token,
+            auth_user_id,
+            profile_id: auth_user_id,
+            username: format!("user-{}", &auth_user_id.to_string()[..8]),
+        };
+        *self.session.lock().expect("session lock") = Some(session.clone());
+
+        let profiles = self
+            .rest_get(&format!(
+                "profiles?auth_user_id=eq.{auth_user_id}&select=id,username,display_name,avatar_url,is_admin,bio&limit=1"
+            ))
+            .await?;
+        let profile: ProfileRow = profiles
+            .first()
+            .and_then(|row| serde_json::from_value(row.clone()).ok())
+            .unwrap_or_default();
+        let mut session = session;
+        session.profile_id = profile.id_uuid().unwrap_or(auth_user_id);
+        if let Some(username) = profile.username.clone() {
+            session.username = username;
+        }
+        *self.session.lock().expect("session lock") = Some(session.clone());
+        self.profiles
+            .lock()
+            .expect("profiles lock")
+            .insert(session.profile_id, profile);
+        Ok(session)
+    }
+
+    /// Which external providers the instance has enabled, phrased for a login
+    /// failure. `None` when there are none (or the settings are unreadable).
+    async fn sso_hint(&self, info: &InstanceInfo) -> Option<String> {
+        let url = format!("{}/auth/v1/settings", info.supabase_url.trim_end_matches('/'));
+        let response = self
+            .http
+            .get(url)
+            .header("apikey", &info.supabase_anon_key)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let settings: Value = response.json().await.ok()?;
+        let external = settings.get("external")?.as_object()?;
+        let mut providers: Vec<String> = external
+            .iter()
+            .filter(|(_, enabled)| enabled.as_bool() == Some(true))
+            .map(|(name, _)| name.clone())
+            .collect();
+        providers.sort();
+        if providers.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "this instance offers {} sign-in, and an account created that way has no password. \
+             Sign in through the web app, then start the client with --session <file> \
+             (DevTools → Application → Local Storage → sb-…-auth-token)",
+            providers.join("/")
+        ))
+    }
+
+    /// Exchange the refresh token for a new access token. Returns whether the
+    /// session was replaced.
+    async fn refresh_session(&self) -> bool {
+        let Some(current) = self.session.lock().expect("session lock").clone() else {
+            return false;
+        };
+        let Some(refresh_token) = current.refresh_token.clone() else {
+            return false;
+        };
+        let Some(info) = self.info.lock().expect("info lock").clone() else {
+            return false;
+        };
+        let url = format!(
+            "{}/auth/v1/token?grant_type=refresh_token",
+            info.supabase_url.trim_end_matches('/')
+        );
+        let Ok(response) = self
+            .http
+            .post(url)
+            .header("apikey", &info.supabase_anon_key)
+            .header("Content-Type", "application/json")
+            .json(&json!({ "refresh_token": refresh_token }))
+            .send()
+            .await
+        else {
+            return false;
+        };
+        if !response.status().is_success() {
+            return false;
+        }
+        let Ok(refreshed) = response.json::<GoTrueSession>().await else {
+            return false;
+        };
+        let mut session = current;
+        session.access_token = refreshed.access_token;
+        if refreshed.refresh_token.is_some() {
+            session.refresh_token = refreshed.refresh_token;
+        }
+        *self.session.lock().expect("session lock") = Some(session);
+        true
     }
 
     /// Turn a stored `avatar_url` (an object path or a URL) into something
@@ -1027,6 +1203,22 @@ fn looks_like_object_path(raw: &str) -> bool {
                 )
             })
             .unwrap_or(false)
+}
+
+/// Read one claim out of a JWT without verifying it: the signature is the
+/// server's business, the client only needs `sub`.
+fn jwt_claim(token: &str, key: &str) -> Option<String> {
+    use base64::Engine;
+    let payload = token.split('.').nth(1)?;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    let value: Value = serde_json::from_slice(&decoded).ok()?;
+    value
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
 }
 
 /// PostgREST errors are `{message, details, hint, code}` instead of `{error}`.
