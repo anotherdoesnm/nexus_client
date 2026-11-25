@@ -93,7 +93,7 @@ Verified against `docs/build/*.md` and `bot-gateway/src`, and covered by
 ## How this was verified
 
 ```
-cargo test              # 39 unit + 6 integration
+cargo test              # 39 unit + 7 integration
 cargo clippy --all-targets
 ```
 

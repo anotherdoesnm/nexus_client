@@ -48,7 +48,7 @@ and the transport button switches bot ⇄ web.
 ```bash
 cargo build                 # no audio: no system packages needed (CI-friendly)
 cargo build --features audio # MP3 UI sounds; needs ALSA (libasound2-dev) on Linux
-cargo test                  # 39 unit tests + 6 protocol integration tests
+cargo test                  # 39 unit tests + 7 protocol integration tests
 cargo clippy --all-targets
 ```
 

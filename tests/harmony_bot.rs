@@ -503,3 +503,131 @@ async fn transport_events_reach_the_session_shape() {
     assert!(saw_connected);
     assert_eq!(saw_message.expect("message").content, "!ping");
 }
+
+#[tokio::test]
+async fn a_session_signs_in_loads_servers_and_answers_unsupported_commands() {
+    use nexus_tui::domain::{Command, Event, LoginRequest, TransportKind};
+    use nexus_tui::harmony::session::Session;
+
+    let instance = start(Mock::new()).await;
+    let (commands_tx, commands_rx) = mpsc::unbounded_channel();
+    let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+
+    // Drive the session directly so the test can inspect every event.
+    let login = LoginRequest {
+        instance: instance.clone(),
+        transport: TransportKind::Bot,
+        token: Some(TOKEN.to_string()),
+        email: None,
+        password: None,
+        server_ids: vec![Uuid::parse_str(SERVER_ID).unwrap()],
+    };
+    let (prefill_tx, prefill_rx) = tokio::sync::oneshot::channel();
+    let _ = prefill_tx.send(login);
+    let session = Session::new(commands_rx, events_tx);
+    let handle = tokio::spawn(async move {
+        match prefill_rx.await {
+            Ok(login) => session.run(Some(login)).await,
+            Err(_) => session.run(None).await,
+        }
+    });
+
+    let mut saw_account = None;
+    let mut saw_ready = false;
+    let mut servers = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_secs(2), events_rx.recv()).await {
+            Ok(Some(Event::AuthSuccess(user))) => saw_account = Some(user),
+            Ok(Some(Event::Ready {
+                instance: ready_instance,
+                capabilities,
+                ..
+            })) => {
+                assert_eq!(ready_instance, instance);
+                assert!(!capabilities.server_listing);
+                saw_ready = true;
+            }
+            Ok(Some(Event::Servers(list))) => {
+                servers = Some(list);
+                if saw_ready {
+                    break;
+                }
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    assert_eq!(
+        saw_account.expect("an account").username,
+        "ping-bot",
+        "sign-in must report the bot identity"
+    );
+    assert!(saw_ready, "a READY event must follow sign-in");
+    let servers = servers.expect("servers");
+    assert_eq!(servers.len(), 1);
+    assert_eq!(servers[0].channels.len(), 2);
+
+    // History, then a send.
+    commands_tx
+        .send(Command::GetChannelMessages {
+            channel_id: Uuid::parse_str(TEXT_CHANNEL_ID).unwrap(),
+            before: None,
+        })
+        .unwrap();
+    let mut history = None;
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(2), events_rx.recv()).await
+    {
+        if let Event::ChannelMessages { messages, .. } = event {
+            history = Some(messages);
+            break;
+        }
+    }
+    let history = history.expect("message history");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].content, "Pong!");
+
+    let now = Uuid::parse_str(TEXT_CHANNEL_ID).unwrap();
+    commands_tx
+        .send(Command::SendChannelMessage {
+            channel_id: now,
+            content: "hello from the TUI".to_string(),
+        })
+        .unwrap();
+    let mut sent = None;
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(2), events_rx.recv()).await
+    {
+        if let Event::NewChannelMessage(message) = event {
+            sent = Some(message);
+            break;
+        }
+    }
+    assert_eq!(sent.expect("the sent message").content, "hello from the TUI");
+
+    // Features Harmony does not have are answered with an explanation and an
+    // empty list, not silence.
+    commands_tx.send(Command::GetForums).unwrap();
+    let mut saw_unsupported = false;
+    let mut saw_empty_forums = false;
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(2), events_rx.recv()).await
+    {
+        match event {
+            Event::Unsupported { what, .. } => {
+                assert_eq!(what, nexus_tui::domain::Unsupported::Forums);
+                saw_unsupported = true;
+            }
+            Event::Forums(forums) => {
+                assert!(forums.is_empty());
+                saw_empty_forums = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_unsupported, "the session must explain why forums are empty");
+    assert!(saw_empty_forums, "the forum screen must get an empty list");
+
+    commands_tx.send(Command::Logout).unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(3), handle).await;
+}
