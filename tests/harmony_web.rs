@@ -238,8 +238,22 @@ async fn messages(
     }
     let query = original.query().unwrap_or_default();
     match body {
-        // Inserts: a channel message or a DM.
-        Some(Json(_)) => StatusCode::CREATED.into_response(),
+        // Inserts return the stored row (`Prefer: return=representation`), so
+        // the client gets the real id and content back.
+        Some(Json(body)) => {
+            let mut row = fixture("message-row.json");
+            row["content"] = body
+                .get("content")
+                .cloned()
+                .unwrap_or_else(|| json!([]));
+            row["user_id"] = body.get("user_id").cloned().unwrap_or(Value::Null);
+            row["channel_id"] = body.get("channel_id").cloned().unwrap_or(Value::Null);
+            row["conversation_id"] = body
+                .get("conversation_id")
+                .cloned()
+                .unwrap_or(Value::Null);
+            (StatusCode::CREATED, Json(json!([row]))).into_response()
+        }
         None if query.contains(&format!("channel_id=eq.{CHANNEL_ID}")) => {
             Json(json!([fixture("message-row.json")])).into_response()
         }

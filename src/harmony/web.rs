@@ -294,6 +294,36 @@ impl WebTransport {
         }
     }
 
+    /// Insert and ask for the stored row back (`Prefer: return=representation`).
+    /// A silent AutoMod drop is a 201 with zero rows, which a client must see.
+    async fn rest_write_returning(&self, path: &str, body: &Value) -> Result<Vec<Value>, HarmonyError> {
+        let info = self.discover().await?;
+        let url = self.rest_url(&info, path)?;
+        let mut refreshed = false;
+        loop {
+            let session = self.session()?;
+            let response = self
+                .http
+                .post(url.clone())
+                .header("apikey", &info.supabase_anon_key)
+                .header("Authorization", format!("Bearer {}", session.access_token))
+                .header("Content-Type", "application/json")
+                .header("Prefer", "return=representation")
+                .body(body.to_string())
+                .send()
+                .await
+                .map_err(HarmonyError::from)?;
+            let status = response.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
+                refreshed = true;
+                if self.refresh_session().await {
+                    continue;
+                }
+            }
+            return self.json_rows(response).await;
+        }
+    }
+
     /// Map PostgREST message rows (channel or conversation) onto the neutral
     /// shape, resolving authors in one profiles round trip.
     async fn rows_to_messages(
@@ -1390,8 +1420,8 @@ impl Transport for WebTransport {
             .cloned()
             .unwrap_or_default();
         let _ = self.events_tx.send(TransportEvent::Notice(
-            "Web transport: live messages arrive for channels you open (Realtime broadcast topics). \
-             Presence, typing and DMs are not wired up yet."
+            "Web transport: live messages arrive for the channel you open (private Realtime broadcast \
+             topic), and DMs work from the DM screen. Presence and typing are not wired up yet."
                 .to_string(),
         ));
         let _ = self.events_tx.send(TransportEvent::Connected);
@@ -1649,28 +1679,19 @@ impl Transport for WebTransport {
             "user_id": session.profile_id,
             "content": [{ "type": "text", "text": content }],
         });
-        self.rest_write(reqwest::Method::POST, "messages", &body).await?;
-        Ok(MessageInfo {
-            id: Uuid::new_v4(),
-            channel_id: Uuid::nil(),
-            conversation_id: Some(conversation_id),
-            thread_id: None,
-            author: Some(AuthorInfo {
-                id: Some(session.profile_id),
-                raw_id: session.profile_id.to_string(),
-                username: session.username.clone(),
-                display_name: None,
-                avatar_url: None,
-                nickname: None,
-                bot: false,
-            }),
-            content: content.to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            edited: None,
-            reply_to: None,
-            attachments: Vec::new(),
-            reactions: Vec::new(),
-            system: false,
+        let rows = self.rest_write_returning("messages", &body).await?;
+        if rows.is_empty() {
+            return Err(HarmonyError::BadRequest {
+                message: "the instance stored nothing: AutoMod or the server's rules dropped the \
+                          message"
+                    .to_string(),
+            });
+        }
+        let mut messages = self
+            .rows_to_messages(rows, None, Some(conversation_id))
+            .await?;
+        messages.pop().ok_or_else(|| {
+            HarmonyError::protocol("the insert returned a row the client could not read")
         })
     }
 
@@ -1725,28 +1746,19 @@ impl Transport for WebTransport {
         if let Some(reply_to) = reply_to {
             body["reply_to"] = json!(reply_to);
         }
-        self.rest_write(reqwest::Method::POST, "messages", &body).await?;
-        Ok(MessageInfo {
-            id: Uuid::new_v4(),
-            channel_id,
-            conversation_id: None,
-            thread_id: None,
-            author: Some(AuthorInfo {
-                id: Some(session.profile_id),
-                raw_id: session.profile_id.to_string(),
-                username: session.username.clone(),
-                display_name: None,
-                avatar_url: None,
-                nickname: None,
-                bot: false,
-            }),
-            content: content.to_string(),
-            timestamp: chrono::Utc::now().timestamp(),
-            edited: None,
-            reply_to,
-            attachments: Vec::new(),
-            reactions: Vec::new(),
-            system: false,
+        let rows = self.rest_write_returning("messages", &body).await?;
+        if rows.is_empty() {
+            return Err(HarmonyError::BadRequest {
+                message: "the instance stored nothing: AutoMod or the server's rules dropped the \
+                          message"
+                    .to_string(),
+            });
+        }
+        let mut messages = self
+            .rows_to_messages(rows, Some(channel_id), None)
+            .await?;
+        messages.pop().ok_or_else(|| {
+            HarmonyError::protocol("the insert returned a row the client could not read")
         })
     }
 

@@ -93,6 +93,37 @@ Verified against `docs/build/*.md` and `bot-gateway/src`, and covered by
     three documented `error` strings, which `HarmonyError` surfaces verbatim; a bot cannot
     see every channel of a server even though `GET /servers/{id}/channels` returns them.
 
+## Verified against a live instance
+
+An ignored example (`examples/live_probe.rs`, run with credentials in `HARMONY_*`) exercises the
+web transport against a real Harmony 1.9.8 instance:
+
+```
+instance:  har.mony.lol
+account:   lar4s79k4b (…)
+servers:   2
+  Harmony's Town Hall — 17 channels (14 text)
+    #announcements — 5 recent messages
+  Experimental Zone — 4 channels (3 text)
+    #general — 5 recent messages
+dms:       2
+sent a probe message to #general (17e25e08-…)
+watching #general for 8s…
+  connected
+  live echo of our own message: nexus-tui live probe
+```
+
+That covers the password grant, profile resolution, server/channel enumeration, history, the DM
+list, a real send, the private Realtime join and broadcast delivery. Two findings came out of it:
+
+* **A send must ask for the stored row.** With `Prefer: return=minimal` the client has to invent
+  a message id, so the Realtime echo cannot be recognised and the message appears twice. Sends now
+  use `Prefer: return=representation`; zero returned rows mean AutoMod or the server's rules
+  dropped the message, which is reported instead of shown as sent.
+* **The Realtime join is not synchronous.** A broadcast sent in the same instant as `phx_join`
+  can pass by; the client loads a channel's history *after* subscribing, and real use has the
+  socket up long before messages arrive.
+
 ## Realtime on the web transport
 
 Harmony 1.9.x publishes **no** Postgres changes — `supabase_realtime` carries no table, so a
