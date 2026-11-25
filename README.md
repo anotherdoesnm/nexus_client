@@ -151,5 +151,5 @@ and routes.
 ## Credits and licence
 
 Upstream: [`y4my4my4m/nexus_client`](https://github.com/y4my4my4m/nexus_client), MIT, by
-y4my4m. Harmony is [`y4my4my4m/harmony`](https://github.com/y4my4my4m/harmony) (AGPL-3.0 with
+y4my4m — this tree is a fork that replaces the wire protocol. Harmony is [`y4my4my4m/harmony`](https://github.com/y4my4my4m/harmony) (AGPL-3.0 with
 additional terms); this client only talks to it over its public protocols.
