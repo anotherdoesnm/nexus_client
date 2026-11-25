@@ -88,6 +88,10 @@ impl SoundManager {
     }
 }
 
+// --- No-op SoundManager when audio is off (CI, headless, musl, Android) ---
+#[cfg(any(not(feature = "audio"), target_env = "musl", target_os = "android"))]
+pub struct SoundManager;
+
 #[cfg(any(not(feature = "audio"), target_env = "musl", target_os = "android"))]
 impl SoundManager {
     pub fn new() -> Self { SoundManager }
