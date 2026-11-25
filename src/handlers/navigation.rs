@@ -1,7 +1,7 @@
 use crate::app::App;
 use crate::sound::SoundType;
 use crate::desktop_notifications::DesktopNotificationService;
-use nexus_tui_common::{ClientMessage, UserColor};
+use crate::domain::{Command, UserColor};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 
@@ -31,7 +31,7 @@ pub fn handle_global_shortcuts(key: KeyEvent, app: &mut App) -> bool {
         KeyCode::F(6) => {
             if app.ui.mode == crate::state::AppMode::Chat {
                 app.set_notification("Refreshing notifications...", Some(500), true);
-                app.send_to_server(ClientMessage::GetNotifications { before: None });
+                app.send_command(Command::GetNotifications { before: None });
                 return true;
             }
         }
@@ -105,7 +105,7 @@ pub fn handle_input_mode(key: KeyEvent, app: &mut App) {
                             return;
                         }
                         
-                        app.send_to_server(ClientMessage::CreateForum {
+                        app.send_command(Command::CreateForum {
                             name: name.clone(),
                             description: description.clone(),
                         });
@@ -136,7 +136,7 @@ pub fn handle_input_mode(key: KeyEvent, app: &mut App) {
                         
                         if let Some(forum_id) = app.forum.current_forum_id {
                             app.forum.pending_new_thread_title = Some(title.clone());
-                            app.send_to_server(ClientMessage::CreateThread {
+                            app.send_command(Command::CreateThread {
                                 forum_id,
                                 title: title.clone(),
                                 content: content.clone(),
@@ -156,7 +156,7 @@ pub fn handle_input_mode(key: KeyEvent, app: &mut App) {
                         if let Some(thread_id) = app.forum.current_thread_id {
                             // Check if this is a reply to a specific post
                             if let Some(reply_to_id) = app.forum.reply_to_post_id {
-                                app.send_to_server(ClientMessage::CreatePostReply {
+                                app.send_command(Command::CreatePostReply {
                                     thread_id,
                                     content: input.clone(),
                                     reply_to: reply_to_id,
@@ -164,7 +164,7 @@ pub fn handle_input_mode(key: KeyEvent, app: &mut App) {
                                 app.set_notification("Reply submitted!", Some(1500), false);
                                 app.forum.set_reply_target(None); // Clear reply target
                             } else {
-                                app.send_to_server(ClientMessage::CreatePost {
+                                app.send_command(Command::CreatePost {
                                     thread_id,
                                     content: input.clone(),
                                 });
@@ -175,7 +175,7 @@ pub fn handle_input_mode(key: KeyEvent, app: &mut App) {
                     }
                     UpdatePassword => {
                         app.sound_manager.play(SoundType::PopupOpen);
-                        app.send_to_server(ClientMessage::UpdatePassword(input));
+                        app.send_command(Command::UpdatePassword(input));
                         app.ui.set_mode(crate::state::AppMode::Settings);
                     }
                     _ => {
@@ -214,22 +214,22 @@ fn handle_main_menu_input(key: KeyEvent, app: &mut App) {
             if let Some(selection) = app.ui.main_menu_state.selected() {
                 match selection {
                     0 => {
-                        app.send_to_server(ClientMessage::GetForums);
+                        app.send_command(Command::GetForums);
                         app.ui.set_mode(crate::state::AppMode::ForumList);
                         app.forum.forum_list_state.select(Some(0));
                     }
                     1 => {
                         app.ui.set_mode(crate::state::AppMode::Chat);
                         app.auth.current_input.clear();
-                        app.send_to_server(ClientMessage::GetServers);
-                        app.send_to_server(ClientMessage::GetDMUserList);
+                        app.send_command(Command::GetServers);
+                        app.send_command(Command::GetDMUserList);
                     }
                     2 => {
                         app.ui.set_mode(crate::state::AppMode::Settings);
                         app.ui.settings_list_state.select(Some(0));
                     }
                     3 => {
-                        app.send_to_server(ClientMessage::Logout);
+                        app.send_command(Command::Logout);
                         app.auth.logout();
                         app.ui.set_mode(crate::state::AppMode::Login);
                         app.auth.clear_inputs();
@@ -281,7 +281,7 @@ fn handle_settings_input(key: KeyEvent, app: &mut App) {
                     2 => {
                         if let Some(user) = &app.auth.current_user {
                             app.profile.profile_requested_by_user = false;
-                            app.send_to_server(ClientMessage::GetProfile { user_id: user.id });
+                            app.send_command(Command::GetProfile { user_id: user.id });
                             app.profile.profile_edit_focus = crate::state::ProfileEditFocus::Bio;
                             app.ui.set_mode(crate::state::AppMode::EditProfile);
                         }
@@ -334,7 +334,7 @@ fn handle_color_picker_input(key: KeyEvent, app: &mut App) {
             
             if let Some(user) = &mut app.auth.current_user {
                 user.color = new_color.into();
-                app.send_to_server(ClientMessage::UpdateColor(UserColor::from(new_color)));
+                app.send_command(Command::UpdateColor(UserColor::from(new_color)));
                 app.sound_manager.play(SoundType::Save);
             }
             app.ui.set_mode(crate::state::AppMode::Settings);

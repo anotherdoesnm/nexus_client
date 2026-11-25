@@ -1,4 +1,4 @@
-use nexus_tui_common::{ClientMessage, ServerMessage};
+use crate::domain::{Capabilities, Command, ConnectionState, Event, TransportKind};
 use crate::sound::{SoundManager, SoundType};
 use crate::state::{
     ChatState, ForumState, ProfileState, AuthState, NotificationState, UiState,
@@ -16,7 +16,7 @@ use crate::desktop_notifications::DesktopNotificationService;
 /// Main application state and controller
 pub struct App<'a> {
     // Network
-    pub to_server: mpsc::UnboundedSender<ClientMessage>,
+    pub to_session: mpsc::UnboundedSender<Command>,
     
     // State modules
     pub auth: AuthState,
@@ -31,6 +31,16 @@ pub struct App<'a> {
     pub image_cache: Arc<ImageCache>,
     pub chat_service: ChatService,
     
+    // Harmony session state
+    pub capabilities: Capabilities,
+    pub transport: Option<TransportKind>,
+    pub instance: Option<String>,
+    pub connection: ConnectionState,
+    /// A persistent explanation shown when a screen cannot work yet.
+    pub unsupported: Option<String>,
+    /// Command line and environment, echoed by the login screen.
+    pub startup: crate::Startup,
+
     // Theme system
     pub background_manager: BackgroundManager, // For animated backgrounds
     pub theme_manager: ThemeManager, // For UI color themes
@@ -43,7 +53,7 @@ pub struct App<'a> {
 }
 
 impl<'a> App<'a> {
-    pub fn new(to_server: mpsc::UnboundedSender<ClientMessage>, sound_manager: &'a SoundManager) -> Self {
+    pub fn new(to_session: mpsc::UnboundedSender<Command>, sound_manager: &'a SoundManager) -> Self {
         let image_cache = Arc::new(ImageCache::with_default_config());
         let chat_service = ChatService::with_image_cache(image_cache.clone());
         let prefs = crate::global_prefs::GlobalPrefs::load();
@@ -52,7 +62,7 @@ impl<'a> App<'a> {
         let mut background_manager = BackgroundManager::new();
         background_manager.set_background_by_name(&prefs.background_name);
         Self {
-            to_server,
+            to_session,
             auth: AuthState::default(),
             chat: ChatState::default(),
             forum: ForumState::default(),
@@ -62,6 +72,12 @@ impl<'a> App<'a> {
             sound_manager,
             image_cache,
             chat_service,
+            capabilities: Capabilities::bot(),
+            transport: None,
+            instance: None,
+            connection: ConnectionState::Disconnected,
+            unsupported: None,
+            startup: crate::Startup::default(),
             background_manager,
             theme_manager,
             config: AppConfig::default(),
@@ -72,9 +88,25 @@ impl<'a> App<'a> {
     }
 
     // --- Core App Methods ---
+
+    /// Prefill the sign-in screen from the command line and environment.
+    pub fn apply_startup(&mut self) {
+        if let Some(instance) = self.startup.instance.clone() {
+            self.auth.current_input = instance;
+        }
+        if let Some(token) = self.startup.token.clone() {
+            self.auth.password_input = token;
+        }
+        if let Some(email) = self.startup.email.clone() {
+            self.auth.email_input = email;
+        }
+        if let Some(transport) = self.startup.transport {
+            self.auth.transport = transport;
+        }
+    }
     
-    pub fn send_to_server(&mut self, msg: ClientMessage) {
-        if let Err(e) = self.to_server.send(msg) {
+    pub fn send_command(&mut self, msg: Command) {
+        if let Err(e) = self.to_session.send(msg) {
             self.set_notification(format!("Failed to send message: {}", e), Some(3000), true);
         }
     }
@@ -142,20 +174,20 @@ impl<'a> App<'a> {
 
     // --- Server Message Handling ---
     
-    pub fn handle_server_message(&mut self, msg: ServerMessage) {
+    pub fn handle_event(&mut self, msg: Event) {
         use chrono::prelude::*;
         match msg {
-            ServerMessage::AuthSuccess(user) => {
+            Event::AuthSuccess(user) => {
                 self.auth.login(user);
                 self.ui.set_mode(crate::state::AppMode::MainMenu);
                 self.ui.reset_selections();
                 self.sound_manager.play(SoundType::LoginSuccess);
             }
-            ServerMessage::AuthFailure(reason) => {
+            Event::AuthFailure(reason) => {
                 self.set_notification(format!("Error: {}", reason), None, false);
                 self.sound_manager.play(SoundType::LoginFailure);
             }
-            ServerMessage::Forums(forums) => {
+            Event::Forums(forums) => {
                 self.forum.forums = forums;
                 // Handle pending thread selection
                 if let (Some(_forum_id), Some(ref title)) = (self.forum.current_forum_id, &self.forum.pending_new_thread_title.clone()) {
@@ -170,9 +202,9 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            ServerMessage::ForumsLightweight(forums_lightweight) => {
+            Event::ForumsLightweight(forums_lightweight) => {
                 // Convert lightweight forums to regular forums by creating User objects without profile images
-                use nexus_tui_common::{Forum, Thread, Post, User};
+                use crate::domain::{Forum, Thread, Post, User};
                 let forums = forums_lightweight.into_iter().map(|forum_lite| {
                     let threads = forum_lite.threads.into_iter().map(|thread_lite| {
                         let posts = thread_lite.posts.into_iter().map(|post_lite| {
@@ -186,6 +218,8 @@ impl<'a> App<'a> {
                                     profile_pic: None, // No profile images in lightweight version
                                     cover_banner: None, // No cover banners in lightweight version
                                     status: post_lite.author.status,
+                                    display_name: None,
+                                    bot: false,
                                 },
                                 content: post_lite.content,
                                 timestamp: post_lite.timestamp,
@@ -204,6 +238,8 @@ impl<'a> App<'a> {
                                 profile_pic: None, // No profile images in lightweight version
                                 cover_banner: None, // No cover banners in lightweight version
                                 status: thread_lite.author.status,
+                                display_name: None,
+                                bot: false,
                             },
                             posts,
                             timestamp: thread_lite.timestamp,
@@ -233,7 +269,7 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            ServerMessage::Profile(profile) => {
+            Event::Profile(profile) => {
                 if self.profile.profile_requested_by_user {
                     self.profile.set_profile_for_viewing(profile);
                 } else {
@@ -241,7 +277,7 @@ impl<'a> App<'a> {
                 }
                 self.profile.profile_requested_by_user = false;
             }
-            ServerMessage::UserUpdated(user) => {
+            Event::UserUpdated(user) => {
                 // Update user in channel userlist
                 if let Some(existing) = self.chat.channel_userlist.iter_mut().find(|u| u.id == user.id) {
                     *existing = user.clone();
@@ -255,13 +291,13 @@ impl<'a> App<'a> {
                 // Invalidate avatar cache
                 self.profile.invalidate_avatar_cache(user.id);
             }
-            ServerMessage::Servers(servers) => {
+            Event::Servers(servers) => {
                 self.chat.servers = servers;
                 if self.ui.mode == crate::state::AppMode::Chat && self.chat.sidebar_tab == crate::state::SidebarTab::Servers {
                     self.select_and_load_first_chat();
                 }
             }
-            ServerMessage::ChannelUserList { channel_id: _, users } => {
+            Event::ChannelUserList { channel_id: _, users } => {
                 let mut sorted_users = users;
                 sorted_users.sort_by(|a, b| a.username.to_lowercase().cmp(&b.username.to_lowercase()));
                 sorted_users.reverse();
@@ -274,18 +310,18 @@ impl<'a> App<'a> {
                 }
                 
                 // Request missing avatars for users that don't have profile pictures
-                self.chat_service.request_missing_avatars(&self.chat, &self.to_server);
+                self.chat_service.request_missing_avatars(&self.chat, &self.to_session);
             }
-            ServerMessage::DMUserList(users) => {
+            Event::DMUserList(users) => {
                 self.chat.dm_user_list = users;
                 if self.ui.mode == crate::state::AppMode::Chat && self.chat.sidebar_tab == crate::state::SidebarTab::DMs {
                     self.select_and_load_first_chat();
                 }
                 
                 // Request missing avatars for DM users that don't have profile pictures
-                self.chat_service.request_missing_avatars(&self.chat, &self.to_server);
+                self.chat_service.request_missing_avatars(&self.chat, &self.to_session);
             }
-            ServerMessage::DirectMessage(dm) => {
+            Event::DirectMessage(dm) => {
                 let current_user_id = self.auth.current_user.as_ref().map(|u| u.id);                
                 
                 let is_current = if let (Some(crate::state::ChatTarget::DM { user_id }), Some(_my_id)) = (self.chat.current_chat_target.as_ref(), current_user_id) {
@@ -340,7 +376,7 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            ServerMessage::MentionNotification { from, content } => {
+            Event::MentionNotification { from, content } => {
                 self.set_notification(
                     format!("Mentioned by {}: {}", from.username, content),
                     Some(4000),
@@ -351,7 +387,7 @@ impl<'a> App<'a> {
                 DesktopNotificationService::show_mention_notification(&from.username, &content, from.profile_pic.as_deref());
                 self.sound_manager.play(SoundType::Mention);
             }
-            ServerMessage::ForumReplyNotification { thread_id, from_username, message, from_user_profile_pic } => {
+            Event::ForumReplyNotification { thread_id, from_username, message, from_user_profile_pic } => {
                 // Check if user is currently viewing this thread - if so, don't show notification
                 let is_viewing_thread = if let Some(current_thread_id) = self.forum.current_thread_id {
                     current_thread_id == thread_id && self.ui.mode == crate::state::AppMode::PostView
@@ -376,7 +412,7 @@ impl<'a> App<'a> {
                     self.sound_manager.play(SoundType::Mention);
                 }
             }
-            ServerMessage::Notification(text, is_error) => {
+            Event::Notification(text, is_error) => {
                 let prefix = if is_error { "Error: " } else { "Info: " };
                 self.set_notification(format!("{}{}", prefix, text), Some(2000), false);
                 
@@ -398,7 +434,7 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            ServerMessage::Notifications { notifications, history_complete } => {
+            Event::Notifications { notifications, history_complete } => {
                 self.notifications.notifications = notifications.clone();
                 self.notifications.notification_history_complete = history_complete;
                 
@@ -406,19 +442,19 @@ impl<'a> App<'a> {
                 // (not when loading notification history)
                 // We'll rely on the real-time ForumReplyNotification message instead
             }
-            ServerMessage::ServerInviteReceived(invite) => {
+            Event::ServerInviteReceived(invite) => {
                 let message = format!("Server invite from {} to join '{}'", invite.from_user.username, invite.server.name);
                 self.set_notification(message.clone(), Some(5000), false);
                 // Show desktop notification for server invites
                 DesktopNotificationService::show_server_invite_notification(&invite.from_user.username, &invite.server.name);
                 self.sound_manager.play(SoundType::PopupOpen);
             }
-            ServerMessage::ServerInviteResponse { invite_id: _, accepted, user } => {
+            Event::ServerInviteResponse { invite_id: _, accepted, user } => {
                 let status = if accepted { "accepted" } else { "declined" };
                 let message = format!("{} {} your server invite", user.username, status);
                 self.set_notification(message, Some(3000), false);
             }
-            ServerMessage::UserJoined(user) => {
+            Event::UserJoined(user) => {
                 // Update existing user or add new user to channel userlist
                 if let Some(existing) = self.chat.channel_userlist.iter_mut().find(|u| u.id == user.id) {
                     existing.status = user.status.clone();
@@ -431,18 +467,18 @@ impl<'a> App<'a> {
                     existing_dm.status = user.status;
                 }
             }
-            ServerMessage::UserLeft(user_id) => {
+            Event::UserLeft(user_id) => {
                 // Update status to offline instead of removing from list
                 if let Some(existing) = self.chat.channel_userlist.iter_mut().find(|u| u.id == user_id) {
-                    existing.status = nexus_tui_common::UserStatus::Offline;
+                    existing.status = crate::domain::UserStatus::Offline;
                 }
                 
                 // Also update in DM user list if present
                 if let Some(existing_dm) = self.chat.dm_user_list.iter_mut().find(|u| u.id == user_id) {
-                    existing_dm.status = nexus_tui_common::UserStatus::Offline;
+                    existing_dm.status = crate::domain::UserStatus::Offline;
                 }
             }
-            ServerMessage::NewChannelMessage(msg) => {
+            Event::NewChannelMessage(msg) => {
                 let current_target = &self.chat.current_chat_target;
                 let is_current_channel = if let Some(crate::state::ChatTarget::Channel { channel_id, .. }) = current_target {
                     *channel_id == msg.channel_id
@@ -456,7 +492,7 @@ impl<'a> App<'a> {
                     self.chat.unread_channels.insert(msg.channel_id);
                 }
             }
-            ServerMessage::ChannelMessages { channel_id, messages, history_complete } => {
+            Event::ChannelMessages { channel_id, messages, history_complete } => {
                 if let Some(crate::state::ChatTarget::Channel { channel_id: current_channel_id, .. }) = &self.chat.current_chat_target {
                     if *current_channel_id == channel_id {
                         if self.chat.chat_messages.is_empty() {
@@ -472,7 +508,7 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            ServerMessage::DirectMessages { user_id, messages, history_complete } => {
+            Event::DirectMessages { user_id, messages, history_complete } => {
                 if let Some(crate::state::ChatTarget::DM { user_id: current_user_id }) = &self.chat.current_chat_target {
                     if *current_user_id == user_id {
                         if self.chat.dm_messages.is_empty() {
@@ -488,7 +524,7 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            ServerMessage::ChannelMessagesPaginated { 
+            Event::ChannelMessagesPaginated { 
                 channel_id, 
                 messages, 
                 has_more, 
@@ -514,7 +550,7 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            ServerMessage::DirectMessagesPaginated { 
+            Event::DirectMessagesPaginated { 
                 user_id, 
                 messages, 
                 has_more, 
@@ -540,12 +576,12 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            ServerMessage::CacheStats { total_entries, total_size_mb, hit_ratio, expired_entries } => {
+            Event::CacheStats { total_entries, total_size_mb, hit_ratio, expired_entries } => {
                 // Handle cache statistics - could display in debug UI
                 tracing::debug!("Cache stats: {} entries, {:.1}MB, {:.1}% hit ratio, {} expired", 
                     total_entries, total_size_mb, hit_ratio * 100.0, expired_entries);
             }
-            ServerMessage::ImageCacheInvalidated { keys } => {
+            Event::ImageCacheInvalidated { keys } => {
                 // Remove invalidated images from cache
                 for key_str in keys {
                     // Parse key string back to cache key and remove
@@ -553,7 +589,7 @@ impl<'a> App<'a> {
                     tracing::debug!("Cache invalidated for key: {}", key_str);
                 }
             }
-            ServerMessage::PerformanceMetrics { query_time_ms, cache_hit_rate, message_count } => {
+            Event::PerformanceMetrics { query_time_ms, cache_hit_rate, message_count } => {
                 // Log performance metrics for monitoring
                 tracing::debug!("Query performance: {}ms, cache hit rate: {:.1}%, {} messages", 
                     query_time_ms, cache_hit_rate * 100.0, message_count);
@@ -563,7 +599,7 @@ impl<'a> App<'a> {
                     self.set_notification("Slow network detected", Some(2000), false);
                 }
             }
-            ServerMessage::UserAvatars { avatars } => {
+            Event::UserAvatars { avatars } => {
                 // Update avatar cache with received avatars
                 for (user_id, profile_pic) in avatars {
                     // Update users in channel userlist
@@ -579,17 +615,92 @@ impl<'a> App<'a> {
                 }
             }
             
+            Event::Ready {
+                account: _,
+                instance,
+                transport,
+                capabilities,
+                unavailable_servers,
+            } => {
+                self.instance = Some(instance.clone());
+                self.transport = Some(transport);
+                self.capabilities = capabilities;
+                self.connection = ConnectionState::Online;
+                let label = format!("Connected to {instance} via {}", transport.label());
+                self.set_notification(label, Some(4000), false);
+                if !capabilities.server_listing {
+                    self.unsupported = Some(
+                        "Harmony's bot API cannot list the servers a bot is installed in: start with \
+                         --servers <id,id> (or HARMONY_SERVERS) to open them."
+                            .to_string(),
+                    );
+                }
+                if !unavailable_servers.is_empty() {
+                    let ids = unavailable_servers
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    self.set_notification(
+                        format!("Could not read server(s): {ids}"),
+                        None,
+                        false,
+                    );
+                }
+            }
+            Event::Connection(state) => {
+                self.connection = state;
+                if state != ConnectionState::Online {
+                    self.set_notification(
+                        format!("Connection: {}", state.label()),
+                        Some(3000),
+                        true,
+                    );
+                }
+            }
+            Event::Unsupported { what, detail } => {
+                let explanation = what.explain();
+                let message = match detail {
+                    Some(detail) => format!("{explanation} ({detail})"),
+                    None => explanation,
+                };
+                self.unsupported = Some(message.clone());
+                self.set_notification(message, None, false);
+            }
+            Event::ChannelMessageUpdated(message) => {
+                if let Some(existing) = self
+                    .chat
+                    .chat_messages
+                    .iter_mut()
+                    .find(|existing| existing.id == message.id)
+                {
+                    *existing = message;
+                }
+            }
+            Event::ChannelMessageDeleted {
+                channel_id: _,
+                message_id,
+            } => {
+                self.chat
+                    .chat_messages
+                    .retain(|message| message.id != message_id);
+            }
+            Event::UserList(users) => {
+                let mut sorted = users;
+                sorted.sort_by(|a, b| a.username.to_lowercase().cmp(&b.username.to_lowercase()));
+                self.chat.channel_userlist = sorted;
+            }
             // Handle any unmatched server messages
             _ => {
-                self.handle_legacy_server_message(msg);
+                self.handle_legacy_event(msg);
             }
         }
     }
 
     /// Handle legacy server messages to maintain compatibility
-    fn handle_legacy_server_message(&mut self, msg: ServerMessage) {
+    fn handle_legacy_event(&mut self, msg: Event) {
         // Implementation of existing server message handling logic
-        // This would contain all the existing match arms from the original handle_server_message
+        // This would contain all the existing match arms from the original handle_event
     }
 
     // --- Cache Management ---
@@ -646,8 +757,8 @@ impl<'a> App<'a> {
                         };
                         let channel_id = channel.id;
                         self.set_current_chat_target(target);
-                        self.send_to_server(ClientMessage::GetChannelUserList { channel_id });
-                        self.send_to_server(ClientMessage::GetChannelMessages { channel_id, before: None });
+                        self.send_command(Command::GetChannelUserList { channel_id });
+                        self.send_command(Command::GetChannelMessages { channel_id, before: None });
                         self.chat.reset_scroll_offset();
                     }
                     server_id
@@ -671,7 +782,7 @@ impl<'a> App<'a> {
                         let target = crate::state::ChatTarget::DM { user_id: user.id };
                         let user_id = user.id;
                         self.set_current_chat_target(target);
-                        self.send_to_server(ClientMessage::GetDirectMessages { user_id, before: None });
+                        self.send_command(Command::GetDirectMessages { user_id, before: None });
                         self.chat.unread_dm_conversations.remove(&user_id);
                         self.chat.reset_scroll_offset();
                         user_id
@@ -693,7 +804,7 @@ impl<'a> App<'a> {
         if let Some(target) = &self.chat.current_chat_target.clone() {
             match target {
                 crate::state::ChatTarget::Channel { channel_id, .. } => {
-                    self.send_to_server(ClientMessage::SendChannelMessage {
+                    self.send_command(Command::SendChannelMessage {
                         channel_id: *channel_id,
                         content: validated_content,
                     });
@@ -704,14 +815,14 @@ impl<'a> App<'a> {
                     if let Some((command, _args)) = MessageService::parse_command(&validated_content) {
                         match command.as_str() {
                             "accept" => {
-                                self.send_to_server(ClientMessage::AcceptServerInviteFromUser { from_user_id: *user_id });
+                                self.send_command(Command::AcceptServerInviteFromUser { from_user_id: *user_id });
                                 self.set_notification("Server invite accepted!", Some(2000), false);
                                 self.sound_manager.play(SoundType::Select);
                                 self.clear_current_input();
                                 return Ok(());
                             }
                             "decline" => {
-                                self.send_to_server(ClientMessage::DeclineServerInviteFromUser { from_user_id: *user_id });
+                                self.send_command(Command::DeclineServerInviteFromUser { from_user_id: *user_id });
                                 self.set_notification("Server invite declined.", Some(2000), false);
                                 self.sound_manager.play(SoundType::Select);
                                 self.clear_current_input();
@@ -721,7 +832,7 @@ impl<'a> App<'a> {
                         }
                     }
                     
-                    self.send_to_server(ClientMessage::SendDirectMessage {
+                    self.send_command(Command::SendDirectMessage {
                         to: *user_id,
                         content: validated_content,
                     });
@@ -770,7 +881,7 @@ impl<'a> App<'a> {
         // Clear any previous errors
         self.profile.profile_edit_error = None;
         
-        self.send_to_server(ClientMessage::UpdateProfile {
+        self.send_command(Command::UpdateProfile {
             bio: Some(self.profile.edit_bio.clone()),
             url1: Some(self.profile.edit_url1.clone()),
             url2: Some(self.profile.edit_url2.clone()),

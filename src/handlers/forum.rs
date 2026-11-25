@@ -1,6 +1,6 @@
 use crate::app::App;
 use crate::sound::SoundType;
-use nexus_tui_common::ClientMessage;
+use crate::domain::Command;
 use crossterm::event::{KeyCode, KeyEvent};
 
 /// Handle forum-related input (forum list, thread list, post view)
@@ -42,7 +42,7 @@ fn handle_forum_list_input(key: KeyEvent, app: &mut App) {
         KeyCode::Char('n') | KeyCode::Char('N') => {
             // Admin-only: Create new forum
             if let Some(user) = &app.auth.current_user {
-                if user.role == nexus_tui_common::UserRole::Admin {
+                if user.role == crate::domain::UserRole::Admin {
                     app.enter_input_mode(crate::state::InputMode::NewForumName);
                 }
             }
@@ -50,10 +50,10 @@ fn handle_forum_list_input(key: KeyEvent, app: &mut App) {
         KeyCode::Char('d') | KeyCode::Char('D') => {
             // Admin-only: Delete selected forum
             if let Some(user) = &app.auth.current_user {
-                if user.role == nexus_tui_common::UserRole::Admin {
+                if user.role == crate::domain::UserRole::Admin {
                     if let Some(idx) = app.forum.forum_list_state.selected() {
                         if let Some(forum) = app.forum.forums.get(idx) {
-                            app.send_to_server(ClientMessage::DeleteForum { forum_id: forum.id });
+                            app.send_command(Command::DeleteForum { forum_id: forum.id });
                             app.set_notification("Forum deletion requested", Some(2000), false);
                         }
                     }
@@ -107,11 +107,11 @@ fn handle_thread_list_input(key: KeyEvent, app: &mut App) {
         KeyCode::Char('d') | KeyCode::Char('D') if key.modifiers.contains(KeyModifiers::ALT) => {
             // Admin-only: Delete selected thread
             if let Some(user) = &app.auth.current_user {
-                if user.role == nexus_tui_common::UserRole::Admin {
+                if user.role == crate::domain::UserRole::Admin {
                     if let Some(idx) = app.forum.thread_list_state.selected() {
                         if let Some(forum) = app.forum.get_current_forum() {
                             if let Some(thread) = forum.threads.get(idx) {
-                                app.send_to_server(ClientMessage::DeleteThread(thread.id));
+                                app.send_command(Command::DeleteThread(thread.id));
                                 app.set_notification("Thread deletion requested", Some(2000), false);
                             }
                         }
@@ -238,9 +238,9 @@ fn handle_post_view_input(key: KeyEvent, app: &mut App) {
         KeyCode::Char('d') | KeyCode::Char('D') if key.modifiers.contains(KeyModifiers::ALT) => {
             // Admin-only: Delete selected post
             if let Some(user) = &app.auth.current_user {
-                if user.role == nexus_tui_common::UserRole::Admin {
+                if user.role == crate::domain::UserRole::Admin {
                     if let Some(post) = app.forum.get_selected_post() {
-                        app.send_to_server(ClientMessage::DeletePost(post.id));
+                        app.send_command(Command::DeletePost(post.id));
                         app.set_notification("Post deletion requested", Some(2000), false);
                     }
                 }

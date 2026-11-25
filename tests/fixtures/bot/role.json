@@ -1,0 +1,11 @@
+{
+  "id": "5b9e0000-0000-4000-8000-000000000008",
+  "name": "Moderator",
+  "color": "#5865f2",
+  "position": 3,
+  "permissions": "4096",
+  "is_default": false,
+  "is_admin": false,
+  "mentionable": true,
+  "hoist": false
+}

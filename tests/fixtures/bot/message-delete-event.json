@@ -1,0 +1,14 @@
+{
+  "op": 0,
+  "t": "MESSAGE_DELETE",
+  "d": {
+    "id": "0b9e5a61-0000-4000-8000-000000000005",
+    "server_id": "1e7d0000-0000-4000-8000-000000000001",
+    "channel_id": "c2d4f8a0-0000-4000-8000-000000000002",
+    "thread_id": null,
+    "metadata": {
+      "bot": true,
+      "created_via": "bot_api"
+    }
+  }
+}

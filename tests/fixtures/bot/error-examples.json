@@ -1,0 +1,95 @@
+[
+  {
+    "status": 401,
+    "body": {
+      "error": "Missing Authorization header"
+    }
+  },
+  {
+    "status": 401,
+    "body": {
+      "error": "Invalid Authorization header format. Expected: Bot TOKEN"
+    }
+  },
+  {
+    "status": 401,
+    "body": {
+      "error": "Invalid or expired token"
+    }
+  },
+  {
+    "status": 403,
+    "body": {
+      "error": "Missing permission: send_messages"
+    }
+  },
+  {
+    "status": 403,
+    "body": {
+      "error": "Channel not visible to this bot"
+    }
+  },
+  {
+    "status": 403,
+    "body": {
+      "error": "Missing permission in this channel: send_messages"
+    }
+  },
+  {
+    "status": 403,
+    "body": {
+      "error": "Bot not in server"
+    }
+  },
+  {
+    "status": 403,
+    "body": {
+      "error": "Blocked by the server's AutoMod",
+      "code": "AUTOMOD_BLOCKED"
+    }
+  },
+  {
+    "status": 400,
+    "body": {
+      "error": "Cannot send an empty message"
+    }
+  },
+  {
+    "status": 400,
+    "body": {
+      "error": "Message text exceeds the instance limit of 2000 characters (got 2417)"
+    }
+  },
+  {
+    "status": 404,
+    "body": {
+      "error": "Message not found"
+    }
+  },
+  {
+    "status": 404,
+    "body": {
+      "error": "Not found"
+    }
+  },
+  {
+    "status": 409,
+    "body": {
+      "error": "That Discord message id is taken in this channel",
+      "code": "DISCORD_MESSAGE_ID_TAKEN"
+    }
+  },
+  {
+    "status": 429,
+    "body": {
+      "error": "Rate limit exceeded",
+      "retry_after": 17
+    }
+  },
+  {
+    "status": 503,
+    "body": {
+      "error": "Token verification unavailable"
+    }
+  }
+]

@@ -187,7 +187,7 @@ pub fn draw_minimal_notification_popup(f: &mut Frame, text: String) {
     f.render_widget(p, area);
 }
 
-pub fn draw_profile_view_popup(f: &mut Frame, app: &mut App, profile: &nexus_tui_common::UserProfile) {
+pub fn draw_profile_view_popup(f: &mut Frame, app: &mut App, profile: &crate::domain::UserProfile) {
     let area = draw_centered_rect(f.area(), 70, 60);
     f.render_widget(Clear, area);
     
@@ -327,7 +327,7 @@ pub fn draw_server_actions_popup(f: &mut Frame, app: &App) {
     let server_name = app.chat.selected_server.and_then(|s| app.chat.servers.get(s)).map(|srv| srv.name.as_str()).unwrap_or("<server>");
     let is_owner = app.chat.selected_server
         .and_then(|s| app.chat.servers.get(s))
-        .and_then(|srv| app.auth.current_user.as_ref().map(|u| u.id == srv.owner))
+        .and_then(|srv| app.auth.current_user.as_ref().map(|u| Some(u.id) == srv.owner))
         .unwrap_or(false);
     let mut actions = vec!["View full user list", "Send invite code"];
     if is_owner {

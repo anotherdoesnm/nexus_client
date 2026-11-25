@@ -1,0 +1,32 @@
+{
+  "op": 0,
+  "t": "MESSAGE_CREATE",
+  "d": {
+    "id": "0b9e5a61-0000-4000-8000-000000000005",
+    "server_id": "1e7d0000-0000-4000-8000-000000000001",
+    "channel_id": "c2d4f8a0-0000-4000-8000-000000000002",
+    "thread_id": null,
+    "author": {
+      "id": "8a1f3b77-0000-4000-8000-000000000003",
+      "username": "alice",
+      "display_name": "Alice",
+      "avatar": "https://db.harmony.example.com/storage/v1/render/image/public/avatars/8a1f3b77-0000-4000-8000-000000000003/avatar.png?width=256&height=256&resize=contain&quality=80",
+      "nickname": "Al",
+      "bot": false
+    },
+    "content": "!ping",
+    "content_raw": [
+      {
+        "type": "text",
+        "text": "!ping"
+      }
+    ],
+    "is_system": false,
+    "reply_to": null,
+    "timestamp": "2026-10-13T12:00:00.000000+00:00",
+    "edited_timestamp": "2026-10-13T12:00:00.000000+00:00",
+    "mentions": [],
+    "mention_everyone": false,
+    "metadata": {}
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "3f6c1d2e-0000-4000-8000-000000000004",
+  "username": "ping-bot",
+  "discriminator": "0000",
+  "avatar": "https://harmony.example.com/default_avatar.webp",
+  "bot": true,
+  "verified": false,
+  "public": true,
+  "capabilities": [
+    "bridge_sound_sync",
+    "bridge_emoji_sync",
+    "bridge_sticker_sync",
+    "bridge_history_import",
+    "bridge_privacy"
+  ]
+}

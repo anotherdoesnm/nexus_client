@@ -52,7 +52,7 @@ pub struct UiState {
     pub should_retry_connection: bool,
     
     // Connected users (for legacy compatibility)
-    pub connected_users: Vec<nexus_tui_common::User>,
+    pub connected_users: Vec<crate::domain::User>,
 }
 
 impl Default for UiState {

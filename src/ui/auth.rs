@@ -1,94 +1,222 @@
-//! Authentication (login/register) UI screens.
+//! Sign-in screens. The client speaks Harmony's protocols, so what is asked for
+//! is an instance and a credential: a bot token for the bot gateway, or an
+//! account email and password for the web app's protocol.
 
-use ratatui::{Frame, layout::{Rect, Layout, Constraint}, style::{Style, Color}, widgets::{Block, Paragraph, Borders}, text::{Span}};
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Style},
+    text::Span,
+    widgets::{Block, Borders, Paragraph},
+    Frame,
+};
 use crate::app::{App, InputMode};
-use ratatui::prelude::{Alignment, Direction};
+use crate::domain::TransportKind;
 
 pub fn draw_login(f: &mut Frame, app: &mut App, area: Rect) {
-    let outer_block = Block::default().title("Login").borders(Borders::ALL);
+    let title = format!(
+        "Sign in to a Harmony instance — {}",
+        app.auth.transport_label()
+    );
+    let outer_block = Block::default().title(title).borders(Borders::ALL);
     f.render_widget(outer_block, area);
-    let chunks = Layout::default().margin(2).constraints([
-        Constraint::Length(3), Constraint::Length(3), Constraint::Min(1)
-    ]).split(area);
 
-    let username_style = if matches!(app.auth.input_mode, Some(InputMode::LoginUsername)) {
+    let mut constraints = vec![Constraint::Length(3), Constraint::Length(3)];
+    if app.auth.transport == TransportKind::Web {
+        constraints.push(Constraint::Length(3));
+    }
+    constraints.push(Constraint::Length(3));
+    constraints.push(Constraint::Min(1));
+
+    let chunks = Layout::default()
+        .margin(2)
+        .constraints(constraints)
+        .split(area);
+
+    let mut row = 0;
+
+    let instance_style = if matches!(app.auth.input_mode, Some(InputMode::LoginUsername)) {
         Style::default().fg(Color::Yellow)
-    } else { Style::default() };
+    } else {
+        Style::default()
+    };
     f.render_widget(
         Paragraph::new(app.auth.current_input.as_str())
-            .block(Block::default().borders(Borders::ALL).title("Username")).style(username_style),
-        chunks[0],
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Instance (har.mony.lol)"),
+            )
+            .style(instance_style),
+        chunks[row],
     );
-    let password_style = if matches!(app.auth.input_mode, Some(InputMode::LoginPassword)) {
+    row += 1;
+
+    let secret_style = if matches!(app.auth.input_mode, Some(InputMode::LoginPassword)) {
         Style::default().fg(Color::Yellow)
-    } else { Style::default() };
+    } else {
+        Style::default()
+    };
     f.render_widget(
         Paragraph::new("*".repeat(app.auth.password_input.len()))
-            .block(Block::default().borders(Borders::ALL).title("Password")).style(password_style),
-        chunks[1],
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(app.auth.secret_label()),
+            )
+            .style(secret_style),
+        chunks[row],
     );
+    row += 1;
 
-    let button_area = Layout::default().margin(1).constraints([Constraint::Length(3)]).split(chunks[2])[0];
-    let button_chunks = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(button_area);
+    if app.auth.transport == TransportKind::Web {
+        let email_style = if matches!(app.auth.input_mode, Some(InputMode::LoginEmail)) {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+        f.render_widget(
+            Paragraph::new(app.auth.email_input.as_str())
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Account email"),
+                )
+                .style(email_style),
+            chunks[row],
+        );
+        row += 1;
+    }
+
+    let button_area = Layout::default()
+        .margin(1)
+        .constraints([Constraint::Length(3)])
+        .split(chunks[row])[0];
+    let button_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+        ])
+        .split(button_area);
 
     let submit_style = if matches!(app.auth.input_mode, Some(InputMode::AuthSubmit)) {
         Style::default().bg(Color::Cyan).fg(Color::Black)
-    } else { Style::default() };
-    f.render_widget(Paragraph::new(Span::styled("[ SUBMIT ]", submit_style)).alignment(Alignment::Center), button_chunks[0]);
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled("[ SIGN IN ]", submit_style)).alignment(Alignment::Center),
+        button_chunks[0],
+    );
+
+    let transport_style = if matches!(app.auth.input_mode, Some(InputMode::AuthTransport)) {
+        Style::default().bg(Color::Green).fg(Color::Black)
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!("[ {} ⇄ ]", app.auth.transport_label()),
+            transport_style,
+        ))
+        .alignment(Alignment::Center),
+        button_chunks[1],
+    );
 
     let switch_style = if matches!(app.auth.input_mode, Some(InputMode::AuthSwitch)) {
         Style::default().bg(Color::Magenta).fg(Color::Black)
-    } else { Style::default() };
-    f.render_widget(Paragraph::new(Span::styled("[ To Register ]", switch_style)).alignment(Alignment::Center), button_chunks[1]);
+    } else {
+        Style::default()
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled("[ Create account ]", switch_style))
+            .alignment(Alignment::Center),
+        button_chunks[2],
+    );
 
-    if let Some(InputMode::LoginUsername) = &app.auth.input_mode {
-        f.set_cursor_position((chunks[0].x + app.auth.current_input.len() as u16 + 1, chunks[0].y + 1));
-    } else if let Some(InputMode::LoginPassword) = &app.auth.input_mode {
-        f.set_cursor_position((chunks[1].x + app.auth.password_input.len() as u16 + 1, chunks[1].y + 1));
+    let hint = match app.auth.transport {
+        TransportKind::Bot => {
+            "Bot token: instance → User settings → My bots. Server ids: --servers <uuid,uuid>."
+        }
+        TransportKind::Web => "Your own account: email and password, as on the instance's web app.",
+    };
+    if let Some(startup) = app.startup.instance.as_deref() {
+        f.render_widget(
+            Paragraph::new(format!(
+                "{hint}  Starting instance: {startup}"
+            ))
+            .alignment(Alignment::Center),
+            chunks[row.saturating_add(1).min(chunks.len() - 1)],
+        );
+    } else {
+        f.render_widget(
+            Paragraph::new(hint).alignment(Alignment::Center),
+            chunks[row.saturating_add(1).min(chunks.len() - 1)],
+        );
+    }
+
+    match app.auth.input_mode {
+        Some(InputMode::LoginUsername) => f.set_cursor_position((
+            chunks[0].x + app.auth.current_input.len() as u16 + 1,
+            chunks[0].y + 1,
+        )),
+        Some(InputMode::LoginPassword) => f.set_cursor_position((
+            chunks[1].x + app.auth.password_input.len() as u16 + 1,
+            chunks[1].y + 1,
+        )),
+        Some(InputMode::LoginEmail) => f.set_cursor_position((
+            chunks[2].x + app.auth.email_input.len() as u16 + 1,
+            chunks[2].y + 1,
+        )),
+        _ => {}
     }
 }
 
 pub fn draw_register(f: &mut Frame, app: &mut App, area: Rect) {
-    let outer_block = Block::default().title("Register").borders(Borders::ALL);
+    let outer_block = Block::default()
+        .title("Create an account")
+        .borders(Borders::ALL);
     f.render_widget(outer_block, area);
-    let chunks = Layout::default().margin(2).constraints([
-        Constraint::Length(3), Constraint::Length(3), Constraint::Min(1)
-    ]).split(area);
-    let username_style = if matches!(app.auth.input_mode, Some(InputMode::RegisterUsername)) {
-        Style::default().fg(Color::Yellow)
-    } else { Style::default() };
+
+    let chunks = Layout::default()
+        .margin(2)
+        .constraints([Constraint::Min(3)])
+        .split(area);
+
+    let text = vec![
+        ratatui::text::Line::from(Span::styled(
+            "Accounts are created by the Harmony instance, not by this client.",
+            Style::default().fg(Color::Yellow),
+        )),
+        ratatui::text::Line::from(""),
+        ratatui::text::Line::from(format!(
+            "Open https://{} in a browser, sign up there, then either",
+            app.auth
+                .current_input
+                .trim()
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/')
+                .to_string()
+                .as_str()
+                .to_owned()
+                .as_str()
+        )),
+        ratatui::text::Line::from(
+            "create a bot token (User settings → My bots) to sign in here,",
+        ),
+        ratatui::text::Line::from(
+            "or use the web-app transport with that account's email and password.",
+        ),
+        ratatui::text::Line::from(""),
+        ratatui::text::Line::from(Span::styled(
+            "[ Esc ] back to sign-in",
+            Style::default().fg(Color::Cyan),
+        )),
+    ];
     f.render_widget(
-        Paragraph::new(app.auth.current_input.as_str())
-            .block(Block::default().borders(Borders::ALL).title("Choose Username")).style(username_style),
+        Paragraph::new(text).alignment(Alignment::Left),
         chunks[0],
     );
-    let password_style = if matches!(app.auth.input_mode, Some(InputMode::RegisterPassword)) {
-        Style::default().fg(Color::Yellow)
-    } else { Style::default() };
-    f.render_widget(
-        Paragraph::new("*".repeat(app.auth.password_input.len()))
-            .block(Block::default().borders(Borders::ALL).title("Choose Password")).style(password_style),
-        chunks[1],
-    );
-
-    let button_area = Layout::default().margin(1).constraints([Constraint::Length(3)]).split(chunks[2])[0];
-    let button_chunks = Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(button_area);
-
-    let submit_style = if matches!(app.auth.input_mode, Some(InputMode::AuthSubmit)) {
-        Style::default().bg(Color::Cyan).fg(Color::Black)
-    } else { Style::default() };
-    f.render_widget(Paragraph::new(Span::styled("[ SUBMIT ]", submit_style)).alignment(Alignment::Center), button_chunks[0]);
-
-    let switch_style = if matches!(app.auth.input_mode, Some(InputMode::AuthSwitch)) {
-        Style::default().bg(Color::Magenta).fg(Color::Black)
-    } else { Style::default() };
-    f.render_widget(Paragraph::new(Span::styled("[ To Login ]", switch_style)).alignment(Alignment::Center), button_chunks[1]);
-
-    if let Some(InputMode::RegisterUsername) = &app.auth.input_mode {
-        f.set_cursor_position((chunks[0].x + app.auth.current_input.len() as u16 + 1, chunks[0].y + 1));
-    } else if let Some(InputMode::RegisterPassword) = &app.auth.input_mode {
-        f.set_cursor_position((chunks[1].x + app.auth.password_input.len() as u16 + 1, chunks[1].y + 1));
-    }
 }

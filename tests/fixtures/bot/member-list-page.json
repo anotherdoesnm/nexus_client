@@ -1,0 +1,29 @@
+[
+  {
+    "user": {
+      "id": "8a1f3b77-0000-4000-8000-000000000003",
+      "username": "alice",
+      "display_name": "Alice",
+      "domain": null,
+      "is_local": true,
+      "avatar": "https://db.harmony.example.com/storage/v1/render/image/public/avatars/8a1f3b77-0000-4000-8000-000000000003/avatar.png?width=256&height=256&resize=contain&quality=80"
+    },
+    "nick": "Al",
+    "roles": [
+      "5b9e0000-0000-4000-8000-000000000008"
+    ],
+    "joined_at": "2026-10-01T09:00:00+00:00"
+  },
+  {
+    "user": {
+      "id": "22222222-0000-4000-8000-00000000000b",
+      "username": "bob",
+      "display_name": "Bob",
+      "domain": "other.example.com",
+      "is_local": false
+    },
+    "nick": null,
+    "roles": [],
+    "joined_at": "2026-10-02T10:30:00+00:00"
+  }
+]

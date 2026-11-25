@@ -1,27 +1,31 @@
 [package]
 name = "nexus-tui-client"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Client for the Nexus TUI chat and forums application."
+description = "A terminal client that speaks Harmony's protocol (bot gateway + REST, and the web app's Supabase protocol)."
 authors = ["y4my4m"]
 license = "MIT"
 
+[lib]
+name = "nexus_tui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nexus-tui-client"
+path = "src/main.rs"
+
 [features]
-default = ["audio"]
+# Audio playback needs ALSA on Linux. It is opt-in so that CI and headless
+# builds do not require system packages: `cargo build --features audio`.
+default = []
 audio = ["rodio"]
 
 [dependencies]
-nexus-tui-common = "0.1.0"
 crossterm = "0.27.0"
 ratatui = { version = "0.29.0", features = ["all-widgets"] }
 rand = "0.8.5"
 tokio = { version = "1", features = ["full"] }
-tokio-rustls = "0.25"
-rustls = "0.23"
-rustls-pemfile = "2.1"
-futures = "0.3"
-tokio-util = { version = "0.7", features = ["codec"] }
-bincode = "1.3"
+futures-util = "0.3"
 uuid = { version = "1.8", features = ["v4", "serde"] }
 figlet-rs = "0.1.5"
 once_cell = "1.19"
@@ -31,12 +35,23 @@ image = { version = "0.25.6", features = ["png", "jpeg", "gif"] }
 regex = "1.11.1"
 chrono = { version = "0.4.41", features = ["serde"] }
 chrono-humanize = "0.2"
-serde = "1.0.219"
+serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 tracing = "0.1"
 notify-rust = "4.10"
-rustls-native-certs = "0.7"
+
+# Harmony protocol transport.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+url = "2.5"
+thiserror = "2"
+async-trait = "0.1"
+percent-encoding = "2"
 
 # Optional rodio dependency, only included when the "audio" feature is enabled
 rodio = { version = "0.17", default-features = false, features = ["mp3"], optional = true }
 emojis = "0.6"
+
+[dev-dependencies]
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["full", "test-util"] }

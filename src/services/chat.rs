@@ -1,7 +1,7 @@
 use crate::state::{ChatState, ChatTarget};
 use crate::model::ChatMessageWithMeta;
 use crate::services::image::{ImageCache, ImageCacheKey, CachedImage, ImageCacheStats};
-use nexus_tui_common::{User, ClientMessage};
+use crate::domain::{User, Command};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -313,7 +313,7 @@ impl ChatService {
     }
 
     /// Request avatars for users that don't have profile pictures loaded
-    pub fn request_missing_avatars(&self, chat_state: &ChatState, to_server: &mpsc::UnboundedSender<ClientMessage>) {
+    pub fn request_missing_avatars(&self, chat_state: &ChatState, to_session: &mpsc::UnboundedSender<Command>) {
         let mut missing_user_ids = std::collections::HashSet::new();
         
         // Check channel users for missing avatars
@@ -335,7 +335,7 @@ impl ChatService {
         unique_user_ids.truncate(20); // Limit to prevent server overload
         
         if !unique_user_ids.is_empty() {
-            let _ = to_server.send(ClientMessage::GetUserAvatars { user_ids: unique_user_ids });
+            let _ = to_session.send(Command::GetUserAvatars { user_ids: unique_user_ids });
         }
     }
 }

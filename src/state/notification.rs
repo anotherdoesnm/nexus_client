@@ -1,4 +1,4 @@
-use nexus_tui_common::Notification;
+use crate::domain::Notification;
 
 /// State management for notifications
 pub struct NotificationState {

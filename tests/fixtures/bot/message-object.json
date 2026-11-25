@@ -1,0 +1,22 @@
+{
+  "id": "d7f1c3a2-0000-4000-8000-00000000000c",
+  "channel_id": "c2d4f8a0-0000-4000-8000-000000000002",
+  "thread_id": null,
+  "author": {
+    "id": "3f6c1d2e-0000-4000-8000-000000000004",
+    "username": "ping-bot",
+    "display_name": "Ping Bot",
+    "avatar": "https://harmony.example.com/default_avatar.webp",
+    "bot": true
+  },
+  "content": "Pong!",
+  "is_system": false,
+  "reply_to": "0b9e5a61-0000-4000-8000-000000000005",
+  "timestamp": "2026-10-13T12:00:02.000000+00:00",
+  "edited_timestamp": "2026-10-13T12:00:02.000000+00:00",
+  "mentions": [],
+  "metadata": {
+    "bot": true,
+    "created_via": "bot_api"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "1e7d0000-0000-4000-8000-000000000001",
+  "name": "Lounge",
+  "icon": "https://db.harmony.example.com/storage/v1/render/image/public/server_icons/1e7d0000-0000-4000-8000-000000000001/icon.png?width=128&height=128&resize=contain&quality=80",
+  "owner_id": "8a1f3b77-0000-4000-8000-000000000003",
+  "description": null,
+  "member_count": 3
+}

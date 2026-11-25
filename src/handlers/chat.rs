@@ -1,6 +1,6 @@
 use crate::app::App;
 use crate::sound::SoundType;
-use nexus_tui_common::ClientMessage;
+use crate::domain::Command;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Handle chat-related input
@@ -67,7 +67,7 @@ fn handle_chat_popups(key: KeyEvent, app: &mut App) -> bool {
             KeyCode::Enter => {
                 if let Some(target_user_id) = app.ui.server_invite_target_user {
                     if let Some(server) = app.chat.servers.get(app.ui.server_invite_selected) {
-                        app.send_to_server(ClientMessage::SendServerInvite {
+                        app.send_command(Command::SendServerInvite {
                             to_user_id: target_user_id,
                             server_id: server.id,
                         });
@@ -243,7 +243,7 @@ fn handle_message_input(key: KeyEvent, app: &mut App) {
                         match &app.chat.current_chat_target {
                             Some(crate::state::ChatTarget::Channel { server_id: _, channel_id }) => {
                                 if let Some(oldest_msg) = app.chat.chat_messages.first() {
-                                    app.send_to_server(ClientMessage::GetChannelMessages {
+                                    app.send_command(Command::GetChannelMessages {
                                         channel_id: *channel_id,
                                         before: Some(oldest_msg.timestamp),
                                     });
@@ -251,7 +251,7 @@ fn handle_message_input(key: KeyEvent, app: &mut App) {
                             }
                             Some(crate::state::ChatTarget::DM { user_id }) => {
                                 if let Some(oldest) = app.chat.dm_messages.first() {
-                                    app.send_to_server(ClientMessage::GetDirectMessages {
+                                    app.send_command(Command::GetDirectMessages {
                                         user_id: *user_id,
                                         before: Some(oldest.timestamp),
                                     });
@@ -397,7 +397,7 @@ fn handle_dm_input(key: KeyEvent, app: &mut App) {
             if let Some(target) = app.chat.dm_target {
                 let msg = app.chat.dm_input.clone();
                 if !msg.trim().is_empty() {
-                    app.send_to_server(ClientMessage::SendDirectMessage { to: target, content: msg });
+                    app.send_command(Command::SendDirectMessage { to: target, content: msg });
                     app.sound_manager.play(SoundType::MessageSent);
                 }
             }
@@ -428,7 +428,7 @@ fn handle_user_action(app: &mut App) {
             0 => { // View Profile
                 if let Some(user) = user {
                     app.profile.profile_requested_by_user = true;
-                    app.send_to_server(ClientMessage::GetProfile { user_id: user.id });
+                    app.send_command(Command::GetProfile { user_id: user.id });
                 }
             }
             1 => { // Send DM
@@ -465,7 +465,7 @@ fn handle_scroll_up(app: &mut App) {
             if crate::services::ChatService::should_fetch_more_messages(&app.chat, max_rows) {
                 // Look for the oldest message in the actual chat messages, not channel.messages
                 if let Some(oldest_msg) = app.chat.chat_messages.first() {
-                    app.send_to_server(ClientMessage::GetChannelMessages {
+                    app.send_command(Command::GetChannelMessages {
                         channel_id: *channel_id,
                         before: Some(oldest_msg.timestamp),
                     });
@@ -481,7 +481,7 @@ fn handle_scroll_up(app: &mut App) {
             // Fetch more DM messages if needed
             if crate::services::ChatService::should_fetch_more_messages(&app.chat, max_rows) {
                 if let Some(oldest) = app.chat.dm_messages.first() {
-                    app.send_to_server(ClientMessage::GetDirectMessages {
+                    app.send_command(Command::GetDirectMessages {
                         user_id: *user_id,
                         before: Some(oldest.timestamp),
                     });
@@ -564,7 +564,7 @@ fn move_dm_selection(app: &mut App, direction: i32) {
     }
 
     // Create the same sorted list as the UI to get the display order
-    let mut indexed_users: Vec<(usize, &nexus_tui_common::User)> = app.chat.dm_user_list.iter().enumerate().collect();
+    let mut indexed_users: Vec<(usize, &crate::domain::User)> = app.chat.dm_user_list.iter().enumerate().collect();
     indexed_users.sort_by_key(|(_, u)| (!app.chat.unread_dm_conversations.contains(&u.id), u.username.clone()));
     
     // Find current display index
@@ -605,8 +605,8 @@ fn select_current_sidebar_target(app: &mut App) {
                     app.chat.reset_scroll_offset();
                     
                     // Request new data
-                    app.send_to_server(ClientMessage::GetChannelMessages { channel_id, before: None });
-                    app.send_to_server(ClientMessage::GetChannelUserList { channel_id });
+                    app.send_command(Command::GetChannelMessages { channel_id, before: None });
+                    app.send_command(Command::GetChannelUserList { channel_id });
                     
                     // Play sound feedback
                     app.sound_manager.play(SoundType::ChangeChannel);
@@ -625,7 +625,7 @@ fn select_current_sidebar_target(app: &mut App) {
                     app.chat.reset_scroll_offset();
                     
                     // Request new data
-                    app.send_to_server(ClientMessage::GetDirectMessages { user_id, before: None });
+                    app.send_command(Command::GetDirectMessages { user_id, before: None });
                     app.chat.unread_dm_conversations.remove(&user_id);
                     
                     // Play sound feedback

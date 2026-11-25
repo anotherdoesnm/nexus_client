@@ -13,7 +13,7 @@ pub mod themes;
 pub mod backgrounds;
 
 use ratatui::Frame;
-use nexus_tui_common::UserRole;
+use crate::domain::UserRole;
 use crate::app::{App, AppMode, InputMode};
 use crate::ui::banners::{draw_full_banner, draw_min_banner};
 use crate::ui::auth::{draw_login, draw_register};

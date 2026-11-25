@@ -1,0 +1,40 @@
+{
+  "MESSAGE_REACTION_ADD": {
+    "op": 0,
+    "t": "MESSAGE_REACTION_ADD",
+    "d": {
+      "reaction_id": "5e2c0b1d-0000-4000-8000-000000000007",
+      "message_id": "0b9e5a61-0000-4000-8000-000000000005",
+      "server_id": "1e7d0000-0000-4000-8000-000000000001",
+      "channel_id": "c2d4f8a0-0000-4000-8000-000000000002",
+      "user_id": "8a1f3b77-0000-4000-8000-000000000003",
+      "bot_id": null,
+      "emoji": {
+        "id": null,
+        "name": "\ud83d\udc4d",
+        "url": null,
+        "animated": false
+      },
+      "metadata": {}
+    }
+  },
+  "MESSAGE_REACTION_REMOVE": {
+    "op": 0,
+    "t": "MESSAGE_REACTION_REMOVE",
+    "d": {
+      "reaction_id": "5e2c0b1d-0000-4000-8000-000000000007",
+      "message_id": "0b9e5a61-0000-4000-8000-000000000005",
+      "server_id": "1e7d0000-0000-4000-8000-000000000001",
+      "channel_id": "c2d4f8a0-0000-4000-8000-000000000002",
+      "user_id": "8a1f3b77-0000-4000-8000-000000000003",
+      "bot_id": null,
+      "emoji": {
+        "id": null,
+        "name": "\ud83d\udc4d",
+        "url": null,
+        "animated": false
+      },
+      "metadata": {}
+    }
+  }
+}
