@@ -243,6 +243,7 @@ pub fn message_from_gateway(message: GatewayMessage) -> MessageInfo {
     MessageInfo {
         id: message.id,
         channel_id: message.channel_id,
+        conversation_id: None,
         thread_id: message.thread_id,
         author: message.author.as_ref().map(author_from_gateway),
         content: message.content,
@@ -266,6 +267,7 @@ pub fn message_from_rest(message: Message) -> MessageInfo {
     MessageInfo {
         id: message.id,
         channel_id: message.channel_id,
+        conversation_id: None,
         thread_id: message.thread_id,
         author: message.author.as_ref().map(author_from_gateway),
         content: message.content,

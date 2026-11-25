@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::domain::{
     Attachment, Capabilities, Channel, ChannelKind, ChannelMessage, Command, ConnectionState,
-    Event, LoginRequest, PaginationCursor, PaginationDirection, Reaction, Server, TransportKind,
-    Unsupported, User, UserColor, UserProfile, UserRole, UserStatus,
+    DirectMessage, Event, LoginRequest, PaginationCursor, PaginationDirection, Reaction, Server,
+    TransportKind, Unsupported, User, UserColor, UserProfile, UserRole, UserStatus,
 };
 
 use super::bot::BotTransport;
@@ -50,6 +50,9 @@ pub struct Session {
     caches: Caches,
     /// Messages this session sent, so the gateway's echo is not shown twice.
     sent_messages: HashSet<Uuid>,
+    /// Direct conversation of each peer, learned from the DM list or by opening
+    /// one on demand.
+    dm_conversations: HashMap<Uuid, Uuid>,
 }
 
 #[derive(Default)]
@@ -74,6 +77,7 @@ impl Session {
             capabilities: Capabilities::bot(),
             caches: Caches::default(),
             sent_messages: HashSet::new(),
+            dm_conversations: HashMap::new(),
         }
     }
 
@@ -223,6 +227,7 @@ impl Session {
         self.transport_events = None;
         self.account = None;
         self.caches = Caches::default();
+        self.dm_conversations.clear();
         self.sent_messages.clear();
         self.emit(Event::Connection(ConnectionState::Disconnected));
     }
@@ -337,13 +342,6 @@ impl Session {
                 });
                 self.emit(Event::Forums(Vec::new()));
             }
-            Command::GetDMUserList => {
-                self.emit(Event::Unsupported {
-                    what: Unsupported::DirectMessages,
-                    detail: None,
-                });
-                self.emit(Event::DMUserList(Vec::new()));
-            }
             Command::Register { .. } => self.emit(Event::Unsupported {
                 what: Unsupported::Register,
                 detail: None,
@@ -383,12 +381,24 @@ impl Session {
                 what: Unsupported::Forums,
                 detail: None,
             }),
-            Command::GetDirectMessages { .. }
-            | Command::GetDirectMessagesPaginated { .. }
-            | Command::SendDirectMessage { .. } => self.emit(Event::Unsupported {
-                what: Unsupported::DirectMessages,
-                detail: None,
-            }),
+            Command::GetDMUserList => self.load_dm_list().await,
+            Command::GetDirectMessages { user_id, before } => {
+                self.load_dm_messages(user_id, before).await;
+            }
+            Command::SendDirectMessage { to, content } => self.send_dm(to, content).await,
+            Command::GetDirectMessagesPaginated {
+                user_id,
+                cursor,
+                limit,
+                direction,
+            } => {
+                let limit = limit.unwrap_or(PAGE as usize) as u32;
+                let before = match (direction, cursor) {
+                    (PaginationDirection::Backward, PaginationCursor::Timestamp(ts)) => Some(ts),
+                    _ => None,
+                };
+                self.load_dm_messages_with_limit(user_id, before, limit).await;
+            }
         }
     }
 
@@ -544,6 +554,115 @@ impl Session {
                 self.emit(Event::NewChannelMessage(mapped));
             }
             Err(err) => self.notify(err.user_message(), true),
+        }
+    }
+
+    // -- direct messages ---------------------------------------------------
+
+    async fn load_dm_list(&mut self) {
+        let Some(transport) = self.transport.clone() else {
+            return self.not_signed_in();
+        };
+        match transport.dm_conversations().await {
+            Ok(conversations) => {
+                let mut users = Vec::new();
+                for conversation in conversations {
+                    if let Some(peer) = &conversation.peer {
+                        self.dm_conversations.insert(peer.id, conversation.id);
+                        let user = self.member_to_domain(peer);
+                        self.caches.users.insert(user.id, user.clone());
+                        users.push(user);
+                    }
+                }
+                self.emit(Event::DMUserList(users));
+            }
+            Err(HarmonyError::Unsupported(_)) => {
+                self.emit(Event::Unsupported {
+                    what: Unsupported::DirectMessages,
+                    detail: None,
+                });
+                self.emit(Event::DMUserList(Vec::new()));
+            }
+            Err(err) => self.notify(err.user_message(), true),
+        }
+    }
+
+    async fn load_dm_messages(&mut self, user_id: Uuid, before: Option<i64>) {
+        self.load_dm_messages_with_limit(user_id, before, PAGE).await;
+    }
+
+    async fn load_dm_messages_with_limit(&mut self, user_id: Uuid, before: Option<i64>, limit: u32) {
+        let Some(conversation_id) = self.conversation_for(user_id).await else {
+            return;
+        };
+        let Some(transport) = self.transport.clone() else {
+            return self.not_signed_in();
+        };
+        match transport.dm_messages(conversation_id, before, limit).await {
+            Ok(messages) => {
+                for message in &messages {
+                    self.remember_author(message);
+                }
+                let mapped: Vec<DirectMessage> = messages
+                    .into_iter()
+                    .map(|message| self.dm_to_domain(message, user_id))
+                    .collect();
+                let history_complete = mapped.len() < limit as usize;
+                self.emit(Event::DirectMessages {
+                    user_id,
+                    messages: mapped,
+                    history_complete,
+                });
+            }
+            Err(err) => self.notify(err.user_message(), true),
+        }
+    }
+
+    async fn send_dm(&mut self, to: Uuid, content: String) {
+        let Some(conversation_id) = self.conversation_for(to).await else {
+            return;
+        };
+        let Some(transport) = self.transport.clone() else {
+            return self.not_signed_in();
+        };
+        match transport.send_dm(conversation_id, &content).await {
+            Ok(message) => {
+                let mapped = self.dm_to_domain(message, to);
+                self.emit(Event::DirectMessage(mapped));
+            }
+            Err(err) => self.notify(err.user_message(), true),
+        }
+    }
+
+    /// The conversation with a peer, opening it when the list has not seen it.
+    async fn conversation_for(&mut self, user_id: Uuid) -> Option<Uuid> {
+        if let Some(conversation_id) = self.dm_conversations.get(&user_id) {
+            return Some(*conversation_id);
+        }
+        let transport = self.transport.clone()?;
+        match transport.open_dm_with(user_id).await {
+            Ok(conversation_id) => {
+                self.dm_conversations.insert(user_id, conversation_id);
+                Some(conversation_id)
+            }
+            Err(err) => {
+                self.notify(err.user_message(), true);
+                None
+            }
+        }
+    }
+
+    fn dm_to_domain(&self, message: MessageInfo, peer: Uuid) -> DirectMessage {
+        DirectMessage {
+            id: message.id,
+            from: message
+                .author
+                .as_ref()
+                .and_then(|author| author.id)
+                .unwrap_or(peer),
+            to: peer,
+            timestamp: message.timestamp,
+            content: message.content,
         }
     }
 
@@ -794,11 +913,232 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::transport::DmConversation;
 
     fn session() -> (Session, mpsc::UnboundedSender<Command>) {
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
         let (events_tx, _events_rx) = mpsc::unbounded_channel();
         (Session::new(commands_rx, events_tx), commands_tx)
+    }
+
+    struct DmStub {
+        peer: Uuid,
+        conversation: Uuid,
+        me: Uuid,
+    }
+
+    #[async_trait::async_trait]
+    impl Transport for DmStub {
+        fn kind(&self) -> TransportKind {
+            TransportKind::Web
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::web()
+        }
+        fn instance(&self) -> &str {
+            "stub.mony.lol"
+        }
+        async fn sign_in(&self) -> Result<Account, HarmonyError> {
+            Ok(Account {
+                id: self.me,
+                username: "me".to_string(),
+                display_name: None,
+                avatar_url: None,
+                bot: false,
+            })
+        }
+        async fn servers(&self) -> Result<Vec<ServerInfo>, HarmonyError> {
+            Ok(Vec::new())
+        }
+        async fn channels(&self, _server_id: Uuid) -> Result<Vec<ChannelInfo>, HarmonyError> {
+            Ok(Vec::new())
+        }
+        async fn members(&self, _server_id: Uuid) -> Result<Vec<MemberInfo>, HarmonyError> {
+            Ok(Vec::new())
+        }
+        async fn messages(
+            &self,
+            _channel_id: Uuid,
+            _before: Option<i64>,
+            _limit: u32,
+        ) -> Result<Vec<MessageInfo>, HarmonyError> {
+            Ok(Vec::new())
+        }
+        async fn send_message(
+            &self,
+            _channel_id: Uuid,
+            _content: &str,
+            _reply_to: Option<Uuid>,
+        ) -> Result<MessageInfo, HarmonyError> {
+            Err(HarmonyError::Unsupported("channels".to_string()))
+        }
+        async fn edit_message(
+            &self,
+            _message_id: Uuid,
+            _content: &str,
+        ) -> Result<MessageInfo, HarmonyError> {
+            Err(HarmonyError::Unsupported("edit".to_string()))
+        }
+        async fn delete_message(&self, _message_id: Uuid) -> Result<(), HarmonyError> {
+            Err(HarmonyError::Unsupported("delete".to_string()))
+        }
+        async fn profile(&self, _user_id: Uuid) -> Result<ProfileInfo, HarmonyError> {
+            Err(HarmonyError::Unsupported("profile".to_string()))
+        }
+        async fn fetch_image(&self, _url: &str) -> Result<Option<String>, HarmonyError> {
+            Ok(None)
+        }
+        fn take_events(&self) -> Option<mpsc::UnboundedReceiver<TransportEvent>> {
+            None
+        }
+        async fn shutdown(&self) {}
+
+        async fn dm_conversations(&self) -> Result<Vec<DmConversation>, HarmonyError> {
+            Ok(vec![DmConversation {
+                id: self.conversation,
+                peer: Some(MemberInfo {
+                    id: self.peer,
+                    username: "bob".to_string(),
+                    display_name: Some("Bob".to_string()),
+                    avatar_url: None,
+                    nickname: None,
+                    roles: Vec::new(),
+                    is_admin: false,
+                    bot: false,
+                }),
+                name: None,
+                is_group: false,
+                unread: 2,
+                last_message: None,
+            }])
+        }
+        async fn dm_messages(
+            &self,
+            conversation_id: Uuid,
+            _before: Option<i64>,
+            _limit: u32,
+        ) -> Result<Vec<MessageInfo>, HarmonyError> {
+            Ok(vec![MessageInfo {
+                id: Uuid::new_v4(),
+                channel_id: Uuid::nil(),
+                conversation_id: Some(conversation_id),
+                thread_id: None,
+                author: Some(super::super::transport::AuthorInfo {
+                    id: Some(self.peer),
+                    raw_id: self.peer.to_string(),
+                    username: "bob".to_string(),
+                    display_name: None,
+                    avatar_url: None,
+                    nickname: None,
+                    bot: false,
+                }),
+                content: "hi from bob".to_string(),
+                timestamp: 1_791_892_800,
+                edited: None,
+                reply_to: None,
+                attachments: Vec::new(),
+                reactions: Vec::new(),
+                system: false,
+            }])
+        }
+        async fn send_dm(
+            &self,
+            conversation_id: Uuid,
+            content: &str,
+        ) -> Result<MessageInfo, HarmonyError> {
+            Ok(MessageInfo {
+                id: Uuid::new_v4(),
+                channel_id: Uuid::nil(),
+                conversation_id: Some(conversation_id),
+                thread_id: None,
+                author: Some(super::super::transport::AuthorInfo {
+                    id: Some(self.me),
+                    raw_id: self.me.to_string(),
+                    username: "me".to_string(),
+                    display_name: None,
+                    avatar_url: None,
+                    nickname: None,
+                    bot: false,
+                }),
+                content: content.to_string(),
+                timestamp: 1_791_892_900,
+                edited: None,
+                reply_to: None,
+                attachments: Vec::new(),
+                reactions: Vec::new(),
+                system: false,
+            })
+        }
+        async fn open_dm_with(&self, _user_id: Uuid) -> Result<Uuid, HarmonyError> {
+            Ok(self.conversation)
+        }
+    }
+
+    #[tokio::test]
+    async fn dm_commands_resolve_the_peer_conversation() {
+        let peer = Uuid::new_v4();
+        let conversation = Uuid::new_v4();
+        let me = Uuid::new_v4();
+        let (commands, commands_rx) = mpsc::unbounded_channel();
+        let (events, mut events_rx) = mpsc::unbounded_channel();
+        let mut session = Session::new(commands_rx, events);
+        session.transport = Some(Arc::new(DmStub {
+            peer,
+            conversation,
+            me,
+        }));
+
+        // The DM list maps the peer to its conversation.
+        session.handle_command(Command::GetDMUserList).await;
+        match events_rx.try_recv() {
+            Ok(Event::DMUserList(users)) => {
+                assert_eq!(users.len(), 1);
+                assert_eq!(users[0].id, peer);
+                assert_eq!(users[0].username, "bob");
+            }
+            other => panic!("expected DMUserList, got {other:?}"),
+        }
+        assert_eq!(session.dm_conversations.get(&peer), Some(&conversation));
+
+        // Opening the peer's history asks the conversation the mapping holds.
+        session
+            .handle_command(Command::GetDirectMessages {
+                user_id: peer,
+                before: None,
+            })
+            .await;
+        match events_rx.try_recv() {
+            Ok(Event::DirectMessages {
+                user_id,
+                messages,
+                history_complete,
+            }) => {
+                assert_eq!(user_id, peer);
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].content, "hi from bob");
+                assert_eq!(messages[0].from, peer);
+                assert_eq!(messages[0].to, peer);
+                assert!(history_complete);
+            }
+            other => panic!("expected DirectMessages, got {other:?}"),
+        }
+
+        // Sending goes to the same conversation and reports the DM back.
+        session
+            .handle_command(Command::SendDirectMessage {
+                to: peer,
+                content: "yo".to_string(),
+            })
+            .await;
+        match events_rx.try_recv() {
+            Ok(Event::DirectMessage(message)) => {
+                assert_eq!(message.content, "yo");
+                assert_eq!(message.to, peer);
+                assert_eq!(message.from, me);
+            }
+            other => panic!("expected DirectMessage, got {other:?}"),
+        }
+        let _ = commands; // the sender is only needed to keep the channel alive
     }
 
     #[test]
@@ -848,6 +1188,7 @@ mod tests {
         let message = MessageInfo {
             id: Uuid::new_v4(),
             channel_id: Uuid::new_v4(),
+            conversation_id: None,
             thread_id: None,
             author: Some(super::super::transport::AuthorInfo {
                 id: Some(author_id),

@@ -484,7 +484,7 @@ impl Capabilities {
     pub const fn web() -> Self {
         Self {
             server_listing: true,
-            direct_messages: false,
+            direct_messages: true,
             forums: false,
             threads: false,
             reactions: false,

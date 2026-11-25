@@ -59,7 +59,7 @@ client never had to, because the Nexus server listed them.
 | Field | Bot | Web |
 |---|---|---|
 | `server_listing` | no | yes |
-| `direct_messages` | no | no (data reachable, screens pending) |
+| `direct_messages` | no (bot protocol has no DM route or event) | yes (list, history, send) |
 | `forums` | no | no |
 | `message_edit`, `attachments` | yes | yes (edit via PATCH; attachments are read-only) |
 | `threads`, `reactions` | no (no thread/reaction UI yet) | no |
@@ -118,10 +118,23 @@ attachments need a re-read; a restricted message arrives as ids only and is skip
 replies also arrive on the channel topic, so `thread_id` needs filtering (this client renders
 them in the channel for now); reactions arrive as `reaction_event` with a resolved emoji.
 
+## Direct messages on the web transport
+
+The DM list is one RPC — `rpc/get_user_conversations` — answering, per conversation,
+`conversation_id`, `type`, `name`, `other_participants[].profile{…}`, `last_message` and
+`unread_messages`. A direct conversation gives the session one peer, which it caches as
+`peer profile id → conversation id`; the DM screen is keyed by the peer, the protocol by the
+conversation, and `Session::conversation_for` is the one place that maps between them, opening
+a conversation with `rpc/create_or_get_direct_conversation(user1_uuid, user2_uuid)` when the
+list has not seen it yet. History and sends use the same `messages` table as channels, with
+`conversation_id` instead of `channel_id`; refusals are the documented `DM_NOT_ALLOWED`,
+`DM_UNDELIVERABLE`, `RECIPIENT_DELETED` and the RLS-empty case (an empty page means "not a
+participant", not "no messages").
+
 ## How this was verified
 
 ```
-cargo test              # 43 unit + 8 integration
+cargo test              # 47 unit + 8 integration
 cargo clippy --all-targets
 ```
 
@@ -134,7 +147,10 @@ delivery, a `4004` close (no retry), a heartbeat-timeout close (reconnect), and 
 event stream the session consumes, and a mock Realtime socket that refuses anything but a
 private join with the user's JWT and then delivers a documented `message_event` broadcast.
 Headless `ratatui` tests render the sign-in screen for both transports and drive
-`AuthSuccess`/`Ready`/`Unsupported` through the app.
+`AuthSuccess`/`Ready`/`Unsupported` through the app. The DM path is covered by unit tests over
+the `get_user_conversations` row shape and by a session test that drives
+`GetDMUserList`/`GetDirectMessages`/`SendDirectMessage` through a stub transport, asserting the
+peer→conversation mapping and the emitted events.
 
 The original tree did not compile against current dependency versions (`cargo check` failed on
 the TLS/bincode block and on `rodio`); with the protocol layer replaced it builds, and

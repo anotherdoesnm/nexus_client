@@ -25,8 +25,8 @@ use super::error::HarmonyError;
 use super::model::parse_timestamp;
 use super::realtime::{RealtimeClient, RealtimeConfig, RealtimeUpdate};
 use super::transport::{
-    Account, AttachmentInfo, AuthorInfo, ChannelInfo, MemberInfo, MessageInfo, ProfileInfo,
-    ReactionInfo, ServerInfo, Transport, TransportEvent,
+    Account, AttachmentInfo, AuthorInfo, ChannelInfo, DmConversation, MemberInfo, MessageInfo,
+    ProfileInfo, ReactionInfo, ServerInfo, Transport, TransportEvent,
 };
 
 /// What `GET /api/federation/instance-info` answers.
@@ -257,6 +257,83 @@ impl WebTransport {
         }
         let text = response.text().await.unwrap_or_default();
         Err(postgrest_error(status.as_u16(), &text))
+    }
+
+    /// Map PostgREST message rows (channel or conversation) onto the neutral
+    /// shape, resolving authors in one profiles round trip.
+    async fn rows_to_messages(
+        &self,
+        rows: Vec<Value>,
+        channel_id: Option<Uuid>,
+        conversation_id: Option<Uuid>,
+    ) -> Result<Vec<MessageInfo>, HarmonyError> {
+        let info = self.discover().await?;
+        let author_ids: Vec<Uuid> = rows
+            .iter()
+            .filter_map(|row| row.get("user_id").and_then(|value| value.as_str()))
+            .filter_map(|value| Uuid::parse_str(value).ok())
+            .collect();
+        let profiles = self.resolve_profiles(&author_ids).await;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            let Some(id) = row
+                .get("id")
+                .and_then(|value| value.as_str())
+                .and_then(|value| Uuid::parse_str(value).ok())
+            else {
+                continue;
+            };
+            let author_id = row
+                .get("user_id")
+                .and_then(|value| value.as_str())
+                .and_then(|value| Uuid::parse_str(value).ok());
+            let author = author_id.map(|id| match profiles.get(&id) {
+                Some(profile) => self.author_from_profile(&info, profile, id),
+                None => AuthorInfo {
+                    id: Some(id),
+                    raw_id: id.to_string(),
+                    username: format!("user-{}", &id.to_string()[..8]),
+                    display_name: None,
+                    avatar_url: None,
+                    nickname: None,
+                    bot: false,
+                },
+            });
+            let (text, attachments) =
+                render_content(row.get("content").unwrap_or(&Value::Null));
+            let created = row
+                .get("created_at")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let updated = row
+                .get("updated_at")
+                .and_then(|value| value.as_str())
+                .unwrap_or(created);
+            let created_at = parse_timestamp(created);
+            let edited = parse_timestamp(updated);
+            messages.push(MessageInfo {
+                id,
+                channel_id: channel_id.unwrap_or(Uuid::nil()),
+                conversation_id,
+                thread_id: None,
+                author,
+                content: text,
+                timestamp: created_at,
+                edited: if edited > created_at { Some(edited) } else { None },
+                reply_to: row
+                    .get("reply_to")
+                    .and_then(|value| value.as_str())
+                    .and_then(|value| Uuid::parse_str(value).ok()),
+                attachments,
+                reactions: Vec::<ReactionInfo>::new(),
+                system: row
+                    .get("is_system")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+            });
+        }
+        Ok(messages)
     }
 
     /// Open the Realtime socket once and subscribe to a channel's topic.
@@ -683,6 +760,7 @@ async fn live_message(
     MessageInfo {
         id: message_id,
         channel_id,
+        conversation_id: None,
         thread_id: row
             .get("thread_id")
             .and_then(|value| value.as_str())
@@ -789,6 +867,141 @@ fn resolve_media_url(
         info.supabase_url.trim_end_matches('/'),
         raw
     ))
+}
+
+
+/// Parse `get_user_conversations()`'s row into the neutral conversation shape.
+fn conversation_from_row(
+    info: &InstanceInfo,
+    instance: &str,
+    row: &Value,
+    me: Uuid,
+) -> Option<DmConversation> {
+    let conversation_id = row
+        .get("conversation_id")
+        .or_else(|| row.get("id"))
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())?;
+
+    let is_group = row
+        .get("type")
+        .and_then(|value| value.as_str())
+        .map(|kind| kind != "direct")
+        .unwrap_or(false);
+
+    let peer = row
+        .get("other_participants")
+        .and_then(|value| value.as_array())
+        .and_then(|participants| participants.first())
+        .and_then(|participant| {
+            let profile = participant.get("profile")?;
+            let id = profile
+                .get("id")
+                .and_then(|value| value.as_str())
+                .and_then(|value| Uuid::parse_str(value).ok())?;
+            Some(MemberInfo {
+                id,
+                username: profile
+                    .get("username")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+                display_name: profile
+                    .get("display_name")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                avatar_url: profile
+                    .get("avatar_url")
+                    .and_then(|value| value.as_str())
+                    .and_then(|raw| resolve_media_url(info, instance, raw, "avatars")),
+                nickname: None,
+                roles: Vec::new(),
+                is_admin: false,
+                bot: false,
+            })
+        })
+        // A group conversation has no single peer; a direct one is useless
+        // without the other participant.
+        .filter(|_| !is_group)
+        .or_else(|| {
+            let _ = me;
+            None
+        });
+
+    let unread = row
+        .get("unread_messages")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0) as u32;
+
+    let last_message = row
+        .get("last_message")
+        .filter(|value| value.is_object())
+        .and_then(|message| {
+            let id = message
+                .get("id")
+                .and_then(|value| value.as_str())
+                .and_then(|value| Uuid::parse_str(value).ok())?;
+            let (content, _) = render_content(message.get("content").unwrap_or(&Value::Null));
+            Some(MessageInfo {
+                id,
+                channel_id: Uuid::nil(),
+                conversation_id: Some(conversation_id),
+                thread_id: None,
+                author: message
+                    .get("user_id")
+                    .and_then(|value| value.as_str())
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    .map(|user_id| AuthorInfo {
+                        id: Some(user_id),
+                        raw_id: user_id.to_string(),
+                        username: format!("user-{}", &user_id.to_string()[..8]),
+                        display_name: None,
+                        avatar_url: None,
+                        nickname: None,
+                        bot: false,
+                    }),
+                content,
+                timestamp: parse_timestamp(
+                    message
+                        .get("created_at")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or(""),
+                ),
+                edited: None,
+                reply_to: None,
+                attachments: Vec::new(),
+                reactions: Vec::new(),
+                system: false,
+            })
+        });
+
+    Some(DmConversation {
+        id: conversation_id,
+        peer,
+        name: row
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        is_group,
+        unread,
+        last_message,
+    })
+}
+
+/// PostgREST RPCs may answer a bare UUID, a quoted UUID, or `{…}`.
+fn parse_uuid_value(text: &str) -> Option<Uuid> {
+    let trimmed = text.trim();
+    if let Ok(uuid) = Uuid::parse_str(trimmed.trim_matches('"')) {
+        return Some(uuid);
+    }
+    let value: Value = serde_json::from_str(trimmed).ok()?;
+    match value {
+        Value::String(text) => Uuid::parse_str(&text).ok(),
+        Value::Object(map) => map
+            .values()
+            .find_map(|value| value.as_str().and_then(|text| Uuid::parse_str(text).ok())),
+        _ => None,
+    }
 }
 
 /// Whether a stored media value looks like a Supabase object path rather than
@@ -1155,7 +1368,6 @@ impl Transport for WebTransport {
         before: Option<i64>,
         limit: u32,
     ) -> Result<Vec<MessageInfo>, HarmonyError> {
-        let info = self.discover().await?;
         let limit = limit.clamp(1, 200);
         let mut query = format!(
             "messages?channel_id=eq.{channel_id}&thread_id=is.null&is_deleted=eq.false&order=created_at.desc&limit={limit}&select=id,created_at,updated_at,content,user_id,is_system,metadata,reply_to"
@@ -1167,65 +1379,140 @@ impl Transport for WebTransport {
             ));
         }
         let rows = self.rest_get(&query).await?;
-
-        let author_ids: Vec<Uuid> = rows
-            .iter()
-            .filter_map(|row| row.get("user_id").and_then(|v| v.as_str()))
-            .filter_map(|value| Uuid::parse_str(value).ok())
-            .collect();
-        let profiles = self.resolve_profiles(&author_ids).await;
-
-        let mut messages = Vec::with_capacity(rows.len());
-        for row in rows {
-            let Some(id) = row
-                .get("id")
-                .and_then(|v| v.as_str())
-                .and_then(|v| Uuid::parse_str(v).ok())
-            else {
-                continue;
-            };
-            let author_id = row
-                .get("user_id")
-                .and_then(|v| v.as_str())
-                .and_then(|v| Uuid::parse_str(v).ok());
-            let author = author_id.map(|id| match profiles.get(&id) {
-                Some(profile) => self.author_from_profile(&info, profile, id),
-                None => AuthorInfo {
-                    id: Some(id),
-                    raw_id: id.to_string(),
-                    username: format!("user-{}", &id.to_string()[..8]),
-                    display_name: None,
-                    avatar_url: None,
-                    nickname: None,
-                    bot: false,
-                },
-            });
-            let (text, attachments) = render_content(
-                row.get("content").unwrap_or(&Value::Null),
-            );
-            let created = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
-            let updated = row.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-            let created_at = parse_timestamp(created);
-            let edited = parse_timestamp(updated);
-            messages.push(MessageInfo {
-                id,
-                channel_id,
-                thread_id: None,
-                author,
-                content: text,
-                timestamp: created_at,
-                edited: if edited > created_at { Some(edited) } else { None },
-                reply_to: row
-                    .get("reply_to")
-                    .and_then(|v| v.as_str())
-                    .and_then(|v| Uuid::parse_str(v).ok()),
-                attachments,
-                reactions: Vec::<ReactionInfo>::new(),
-                system: row.get("is_system").and_then(|v| v.as_bool()).unwrap_or(false),
-            });
-        }
+        let mut messages = self
+            .rows_to_messages(rows, Some(channel_id), None)
+            .await?;
         messages.sort_by_key(|message| message.timestamp);
         Ok(messages)
+    }
+
+    async fn dm_conversations(&self) -> Result<Vec<DmConversation>, HarmonyError> {
+        let info = self.discover().await?;
+        let session = self.session()?;
+        let url = format!(
+            "{}/rest/v1/rpc/get_user_conversations",
+            info.supabase_url.trim_end_matches('/')
+        );
+        let response = self
+            .http
+            .post(url)
+            .header("apikey", &info.supabase_anon_key)
+            .header("Authorization", format!("Bearer {}", session.access_token))
+            .header("Content-Type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .map_err(HarmonyError::from)?;
+        let status = response.status();
+        let text = response.text().await.map_err(HarmonyError::from)?;
+        if !status.is_success() {
+            return Err(postgrest_error(status.as_u16(), &text));
+        }
+        let rows: Vec<Value> = serde_json::from_str(&text).unwrap_or_default();
+        let mut conversations = Vec::with_capacity(rows.len());
+        for row in &rows {
+            if let Some(conversation) =
+                conversation_from_row(&info, &self.instance, row, session.profile_id)
+            {
+                conversations.push(conversation);
+            }
+        }
+        Ok(conversations)
+    }
+
+    async fn dm_messages(
+        &self,
+        conversation_id: Uuid,
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<MessageInfo>, HarmonyError> {
+        let limit = limit.clamp(1, 200);
+        let mut query = format!(
+            "messages?conversation_id=eq.{conversation_id}&is_deleted=eq.false&order=created_at.desc&limit={limit}&select=id,created_at,updated_at,content,user_id,is_system,metadata,reply_to"
+        );
+        if let Some(before) = before {
+            query.push_str(&format!(
+                "&created_at=lt.{}",
+                super::model::epoch_to_iso8601(before)
+            ));
+        }
+        let rows = self.rest_get(&query).await?;
+        let mut messages = self
+            .rows_to_messages(rows, None, Some(conversation_id))
+            .await?;
+        messages.sort_by_key(|message| message.timestamp);
+        Ok(messages)
+    }
+
+    async fn send_dm(
+        &self,
+        conversation_id: Uuid,
+        content: &str,
+    ) -> Result<MessageInfo, HarmonyError> {
+        let session = self.session()?;
+        let body = json!({
+            "conversation_id": conversation_id,
+            "user_id": session.profile_id,
+            "content": [{ "type": "text", "text": content }],
+        });
+        self.rest_write(reqwest::Method::POST, "messages", &body).await?;
+        Ok(MessageInfo {
+            id: Uuid::new_v4(),
+            channel_id: Uuid::nil(),
+            conversation_id: Some(conversation_id),
+            thread_id: None,
+            author: Some(AuthorInfo {
+                id: Some(session.profile_id),
+                raw_id: session.profile_id.to_string(),
+                username: session.username.clone(),
+                display_name: None,
+                avatar_url: None,
+                nickname: None,
+                bot: false,
+            }),
+            content: content.to_string(),
+            timestamp: chrono::Utc::now().timestamp(),
+            edited: None,
+            reply_to: None,
+            attachments: Vec::new(),
+            reactions: Vec::new(),
+            system: false,
+        })
+    }
+
+    async fn open_dm_with(&self, user_id: Uuid) -> Result<Uuid, HarmonyError> {
+        let info = self.discover().await?;
+        let session = self.session()?;
+        let url = format!(
+            "{}/rest/v1/rpc/create_or_get_direct_conversation",
+            info.supabase_url.trim_end_matches('/')
+        );
+        let response = self
+            .http
+            .post(url)
+            .header("apikey", &info.supabase_anon_key)
+            .header("Authorization", format!("Bearer {}", session.access_token))
+            .header("Content-Type", "application/json")
+            .body(
+                json!({
+                    "user1_uuid": session.profile_id,
+                    "user2_uuid": user_id,
+                })
+                .to_string(),
+            )
+            .send()
+            .await
+            .map_err(HarmonyError::from)?;
+        let status = response.status();
+        let text = response.text().await.map_err(HarmonyError::from)?;
+        if !status.is_success() {
+            return Err(postgrest_error(status.as_u16(), &text));
+        }
+        parse_uuid_value(&text).ok_or_else(|| {
+            HarmonyError::protocol(format!(
+                "create_or_get_direct_conversation answered {text}"
+            ))
+        })
     }
 
     async fn send_message(
@@ -1248,6 +1535,7 @@ impl Transport for WebTransport {
         Ok(MessageInfo {
             id: Uuid::new_v4(),
             channel_id,
+            conversation_id: None,
             thread_id: None,
             author: Some(AuthorInfo {
                 id: Some(session.profile_id),
@@ -1411,6 +1699,110 @@ mod tests {
         assert!(!looks_like_object_path("hello"));
         assert!(!looks_like_object_path("just/a/word"));
         assert!(!looks_like_object_path("/absolute.png"));
+    }
+
+    fn instance() -> InstanceInfo {
+        InstanceInfo {
+            name: Some("Harmony".to_string()),
+            domain: Some("har.mony.lol".to_string()),
+            version: Some("1.9.8".to_string()),
+            supabase_url: "https://db.mony.lol".to_string(),
+            supabase_anon_key: "anon".to_string(),
+            capabilities: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn parses_a_direct_conversation_from_the_dm_rpc() {
+        let row = json!({
+            "conversation_id": "9f1a2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+            "created_at": "2026-11-20T10:00:00+00:00",
+            "updated_at": "2026-11-25T14:00:00+00:00",
+            "type": "direct",
+            "name": null,
+            "created_by": "3f2a91c4-7b6e-4d1a-9c2f-0a5b8d3e7f21",
+            "is_active": true,
+            "metadata": {},
+            "hidden_at": null,
+            "user_role": "member",
+            "user_joined_at": "2026-11-20T10:00:00+00:00",
+            "other_participants": [{
+                "user_id": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "role": "member",
+                "joined_at": "2026-11-20T10:00:00+00:00",
+                "profile": {
+                    "id": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                    "username": "bob",
+                    "display_name": "Bob",
+                    "avatar_url": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f/a.png"
+                }
+            }],
+            "last_message": {
+                "id": "d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f70",
+                "user_id": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "content": [{ "type": "text", "text": "see you there" }],
+                "encrypted": false,
+                "created_at": "2026-11-25T13:59:00+00:00",
+                "metadata": {}
+            },
+            "unread_messages": 3,
+            "unread_mentions": 0,
+            "is_muted": false
+        });
+        let conversation = conversation_from_row(
+            &instance(),
+            "har.mony.lol",
+            &row,
+            Uuid::parse_str("3f2a91c4-7b6e-4d1a-9c2f-0a5b8d3e7f21").unwrap(),
+        )
+        .expect("a conversation");
+        assert_eq!(
+            conversation.id,
+            Uuid::parse_str("9f1a2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b").unwrap()
+        );
+        assert!(!conversation.is_group);
+        assert_eq!(conversation.unread, 3);
+        let peer = conversation.peer.expect("a peer");
+        assert_eq!(peer.username, "bob");
+        assert_eq!(peer.display_name.as_deref(), Some("Bob"));
+        assert!(peer
+            .avatar_url
+            .as_deref()
+            .unwrap_or_default()
+            .contains("/storage/v1/render/image/public/avatars/"));
+        let last = conversation.last_message.expect("a preview");
+        assert_eq!(last.content, "see you there");
+        assert_eq!(last.conversation_id, Some(conversation.id));
+    }
+
+    #[test]
+    fn group_conversations_have_no_single_peer() {
+        let row = json!({
+            "conversation_id": "9f1a2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+            "type": "group",
+            "name": "Trip",
+            "other_participants": [{ "user_id": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f", "profile": { "id": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f", "username": "bob" } }]
+        });
+        let conversation = conversation_from_row(&instance(), "har.mony.lol", &row, Uuid::nil())
+            .expect("a conversation");
+        assert!(conversation.is_group);
+        assert!(conversation.peer.is_none());
+        assert_eq!(conversation.name.as_deref(), Some("Trip"));
+    }
+
+    #[test]
+    fn rpc_answers_parse_as_uuids() {
+        let id = "9f1a2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
+        assert_eq!(parse_uuid_value(id).unwrap().to_string(), id);
+        let quoted = format!("\"{id}\"");
+        assert_eq!(parse_uuid_value(&quoted).unwrap().to_string(), id);
+        assert_eq!(
+            parse_uuid_value(&format!("{{\"conversation_id\":\"{id}\"}}"))
+                .unwrap()
+                .to_string(),
+            id
+        );
+        assert!(parse_uuid_value("nope").is_none());
     }
 
     #[test]

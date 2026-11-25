@@ -22,7 +22,7 @@ Harmony exposes two client-facing protocols. Both sit behind one trait
 | Transport | What it is | What it gives you |
 |---|---|---|
 | **bot-gateway** (default) | `Authorization: Bot <token>` over `/bot-gateway/api/v1` and the `/bot-gateway/gateway` WebSocket — Harmony's documented bot protocol (opcodes 0/1/2/11, identify, heartbeat, reconnect). | Live message events, channels, members, roles, sending, editing, deleting, reactions, threads, invite previews. No DMs, no server enumeration. |
-| **web-app** | The protocol Harmony's own Vue app speaks: `/api/federation/instance-info` discovery, GoTrue sign-in, PostgREST with the user's JWT, and Supabase Realtime for live messages. | Real accounts, **server enumeration**, message history, and live messages for the channel on screen (Realtime broadcast topics joined privately with the user's JWT). No presence, typing or DMs yet. |
+| **web-app** | The protocol Harmony's own Vue app speaks: `/api/federation/instance-info` discovery, GoTrue sign-in, PostgREST with the user's JWT, and Supabase Realtime for live messages. | Real accounts, **server enumeration**, message history, live messages for the open channel, and **direct messages** (list, history, send) via `get_user_conversations` / `create_or_get_direct_conversation`. No presence or typing yet. |
 
 What each transport cannot do is reported, not hidden: the session answers with
 `Event::Unsupported` and the UI shows the explanation (see "Not in Harmony yet" below).
@@ -48,7 +48,7 @@ and the transport button switches bot ⇄ web.
 ```bash
 cargo build                 # no audio: no system packages needed (CI-friendly)
 cargo build --features audio # MP3 UI sounds; needs ALSA (libasound2-dev) on Linux
-cargo test                  # 43 unit tests + 8 protocol integration tests
+cargo test                  # 47 unit tests + 8 protocol integration tests
 cargo clippy --all-targets
 ```
 
@@ -89,12 +89,11 @@ and routes.
 
 * **Forums** are on Harmony's [ROADMAP](https://github.com/y4my4my4m/harmony/blob/master/ROADMAP.md).
   The forum screens stay, show nothing, and explain why.
-* **Direct messages** exist in the web protocol's tables but no bot route or gateway event
-  covers them; the DM screen explains that.
+* **Direct messages** are only for the web transport: the bot protocol has no DM route and no
+  DM event, so a bot session's DM screen explains that instead of pretending it is empty.
 * **Registration** happens on the instance; the "create account" screen sends you to the web app.
-* **Presence, typing and DMs** on the web transport: the Realtime topics and tables are
-  documented (`docs/protocol-web.md`) but not wired into screens yet. Live channel messages
-  *are* wired: open a channel and new messages arrive over its broadcast topic.
+* **Presence and typing** on the web transport: the tables, RPCs and Realtime topics are
+  documented (`docs/protocol-web.md`) but not wired into the screens yet.
 
 ## Credits and licence
 

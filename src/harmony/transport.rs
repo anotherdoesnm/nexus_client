@@ -95,7 +95,10 @@ pub struct ReactionInfo {
 #[derive(Debug, Clone)]
 pub struct MessageInfo {
     pub id: Uuid,
+    /// `Uuid::nil()` for a direct message, which has a conversation instead.
     pub channel_id: Uuid,
+    /// Set for direct messages only.
+    pub conversation_id: Option<Uuid>,
     pub thread_id: Option<Uuid>,
     pub author: Option<AuthorInfo>,
     pub content: String,
@@ -105,6 +108,18 @@ pub struct MessageInfo {
     pub attachments: Vec<AttachmentInfo>,
     pub reactions: Vec<ReactionInfo>,
     pub system: bool,
+}
+
+/// One direct (or group) conversation, as the DM list needs it.
+#[derive(Debug, Clone)]
+pub struct DmConversation {
+    pub id: Uuid,
+    /// The other participant in a one-to-one conversation.
+    pub peer: Option<MemberInfo>,
+    pub name: Option<String>,
+    pub is_group: bool,
+    pub unread: u32,
+    pub last_message: Option<MessageInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +226,42 @@ pub trait Transport: Send + Sync {
     /// Fetch an avatar or icon and return it as a `data:` URL the image cache
     /// can decode. `Ok(None)` when the resource is gone.
     async fn fetch_image(&self, url: &str) -> Result<Option<String>, HarmonyError>;
+
+    /// Direct conversations this account takes part in. The bot protocol has
+    /// none, so its default is an empty list.
+    async fn dm_conversations(&self) -> Result<Vec<DmConversation>, HarmonyError> {
+        Ok(Vec::new())
+    }
+
+    /// Messages of one direct conversation.
+    async fn dm_messages(
+        &self,
+        _conversation_id: Uuid,
+        _before: Option<i64>,
+        _limit: u32,
+    ) -> Result<Vec<MessageInfo>, HarmonyError> {
+        Err(HarmonyError::Unsupported(
+            "direct messages need the web-app transport".to_string(),
+        ))
+    }
+
+    /// Send to a direct conversation.
+    async fn send_dm(
+        &self,
+        _conversation_id: Uuid,
+        _content: &str,
+    ) -> Result<MessageInfo, HarmonyError> {
+        Err(HarmonyError::Unsupported(
+            "direct messages need the web-app transport".to_string(),
+        ))
+    }
+
+    /// Find or create the one-to-one conversation with `user_id`.
+    async fn open_dm_with(&self, _user_id: Uuid) -> Result<Uuid, HarmonyError> {
+        Err(HarmonyError::Unsupported(
+            "direct messages need the web-app transport".to_string(),
+        ))
+    }
 
     /// Start receiving live events for a channel the user is looking at. The
     /// bot gateway delivers every channel it may read, so it ignores this; the
