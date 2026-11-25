@@ -45,8 +45,17 @@ jobs:
 
       - name: Check the binary is static
         run: |
-          file target/${{ matrix.target }}/release/nexus-tui-client
-          file target/${{ matrix.target }}/release/nexus-tui-client | grep -q 'statically linked'
+          set -eu
+          binary="target/${{ matrix.target }}/release/nexus-tui-client"
+          file "$binary"
+          # `file` says "statically linked" for a non-PIE musl binary and
+          # "static-pie linked" for a PIE one; both are static. What must not
+          # exist is a dynamic interpreter.
+          if readelf -l "$binary" | grep -q 'INTERP'; then
+            echo "the binary has a dynamic interpreter" >&2
+            exit 1
+          fi
+          file "$binary" | grep -Eq 'statically linked|static-pie linked'
 
       - name: Smoke test (runs natively for x86_64 only; arm64 is checked via file/readelf)
         run: |

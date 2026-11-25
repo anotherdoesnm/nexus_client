@@ -57,3 +57,8 @@ emojis = "0.6"
 [dev-dependencies]
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full", "test-util"] }
+
+[profile.release]
+# Static binaries are shipped; strip them everywhere so CI and a local
+# cargo-zigbuild produce the same size.
+strip = true
